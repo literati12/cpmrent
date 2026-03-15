@@ -1374,25 +1374,44 @@ async function handleUpdateMachineStatus(machineId: string) {
         minHeight: "100vh",
       }}
     >
-      <header
-        style={{
-          marginBottom: "24px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: "16px",
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: "32px", margin: 0 }}>CPM Rent Admin</h1>
-          <p style={{ color: "#555" }}>Flottakezelő dashboard</p>
-        </div>
+     <header
+  style={{
+    marginBottom: "24px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "16px",
+    flexWrap: "wrap",
+  }}
+>
+  <div>
+    <h1 style={{ fontSize: "32px", margin: 0 }}>CPM Rent Admin</h1>
+    <p style={{ color: "#555" }}>Flottakezelő dashboard</p>
+  </div>
 
-        <button onClick={logout} style={primaryButtonStyle}>
-          Kijelentkezés
-        </button>
-      </header>
+  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+    <Link
+      href="/mobile"
+      style={{
+        padding: "10px 20px",
+        background: "#2563eb",
+        color: "#fff",
+        borderRadius: "8px",
+        textDecoration: "none",
+        fontWeight: "bold",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      Mobil nézet
+    </Link>
+
+    <button onClick={logout} style={primaryButtonStyle}>
+      Kijelentkezés
+    </button>
+  </div>
+</header>
 
       <section style={cardStyle}>
         <button
