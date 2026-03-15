@@ -1,0 +1,910 @@
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { supabase } from "../../lib/supabaseClient"
+
+type Machine = {
+  id: string
+  name: string | null
+  type: string | null
+  status: string | null
+  location: string | null
+  current_customer: string | null
+  rental_start: string | null
+  rental_end: string | null
+  notes: string | null
+}
+
+type Customer = {
+  id: string
+  name: string | null
+  phone: string | null
+  email: string | null
+  city: string | null
+  address: string | null
+  notes: string | null
+}
+
+type RequestItem = {
+  id: string
+  name: string | null
+  phone: string | null
+  email: string | null
+  city: string | null
+  address: string | null
+  requested_start_date: string | null
+  requested_duration_days: number | null
+  status: string | null
+  assigned_machine_id: string | null
+  priority: number | null
+  notes: string | null
+  created_at?: string | null
+}
+
+type Rental = {
+  id: string
+  machine_id: string
+  customer_id: string
+  start_date: string | null
+  end_date: string | null
+  berleti_dij: number | null
+  fizetett_osszeg: number | null
+  tartozas: number | null
+  visszaszallitas_modja: string | null
+  status: string | null
+  note: string | null
+}
+
+type ActiveCustomerRow = {
+  customer: Customer
+  machine: Machine
+  rental?: Rental
+}
+
+function parseLocalDate(dateString: string) {
+  const [year, month, day] = dateString.split("-").map(Number)
+  return new Date(year, month - 1, day)
+}
+
+function getDaysUntil(dateString: string | null) {
+  if (!dateString) return null
+
+  const end = parseLocalDate(dateString)
+  const start = new Date()
+
+  end.setHours(0, 0, 0, 0)
+  start.setHours(0, 0, 0, 0)
+
+  return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+function isStatus(machine: Machine, value: string) {
+  return (machine.status || "").toLowerCase() === value.toLowerCase()
+}
+
+function formatMoney(value?: number | null) {
+  return new Intl.NumberFormat("hu-HU").format(value || 0) + " Ft"
+}
+
+function getStatusBadgeStyle(status?: string | null) {
+  const normalized = (status || "").toLowerCase()
+
+  if (normalized === "szabad") {
+    return {
+      background: "#dcfce7",
+      color: "#166534",
+      border: "1px solid #bbf7d0",
+    }
+  }
+
+  if (normalized === "kiadva") {
+    return {
+      background: "#dbeafe",
+      color: "#1d4ed8",
+      border: "1px solid #bfdbfe",
+    }
+  }
+
+  if (normalized === "lefoglalt" || normalized === "lefoglalva") {
+    return {
+      background: "#ede9fe",
+      color: "#6d28d9",
+      border: "1px solid #ddd6fe",
+    }
+  }
+
+  if (normalized === "javítás alatt") {
+    return {
+      background: "#fee2e2",
+      color: "#b91c1c",
+      border: "1px solid #fecaca",
+    }
+  }
+
+  if (normalized === "tartalék") {
+    return {
+      background: "#fef3c7",
+      color: "#92400e",
+      border: "1px solid #fde68a",
+    }
+  }
+
+  return {
+    background: "#f3f4f6",
+    color: "#374151",
+    border: "1px solid #e5e7eb",
+  }
+}
+
+export default function MobileDashboardPage() {
+  const router = useRouter()
+
+  const [machines, setMachines] = useState<Machine[]>([])
+  const [customers, setCustomers] = useState<Customer[]>([])
+  const [requests, setRequests] = useState<RequestItem[]>([])
+  const [rentals, setRentals] = useState<Rental[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [activeTab, setActiveTab] = useState<
+    "overview" | "machines" | "requests" | "customers"
+  >("overview")
+
+  useEffect(() => {
+    checkUser()
+  }, [])
+
+  async function checkUser() {
+    const { data, error } = await supabase.auth.getUser()
+
+    if (error || !data.user) {
+      router.push("/login")
+      return
+    }
+
+    await loadAllData()
+  }
+
+  async function loadAllData() {
+    setLoading(true)
+    await Promise.all([
+      fetchMachines(),
+      fetchCustomers(),
+      fetchRequests(),
+      fetchRentals(),
+    ])
+    setLoading(false)
+  }
+
+  async function fetchMachines() {
+    const { data, error } = await supabase
+      .from("machines")
+      .select("*")
+      .order("name", { ascending: true })
+
+    if (!error) setMachines(data || [])
+  }
+
+  async function fetchCustomers() {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("*")
+      .order("name", { ascending: true })
+
+    if (!error) setCustomers(data || [])
+  }
+
+  async function fetchRequests() {
+    const { data, error } = await supabase
+      .from("requests")
+      .select("*")
+      .order("priority", { ascending: true })
+      .order("created_at", { ascending: false })
+
+    if (!error) setRequests(data || [])
+  }
+
+  async function fetchRentals() {
+    const { data, error } = await supabase
+      .from("rentals")
+      .select("*")
+      .order("start_date", { ascending: false })
+
+    if (!error) setRentals(data || [])
+  }
+
+  async function logout() {
+    await supabase.auth.signOut()
+    router.push("/login")
+  }
+
+  const activeRentalsByMachineId = useMemo(() => {
+    const map = new Map<string, Rental>()
+
+    for (const rental of rentals) {
+      if (rental.status === "Aktív" && !map.has(rental.machine_id)) {
+        map.set(rental.machine_id, rental)
+      }
+    }
+
+    return map
+  }, [rentals])
+
+  const nextRequestsByMachineId = useMemo(() => {
+    const map = new Map<string, RequestItem>()
+
+    for (const request of requests) {
+      const isReserved =
+        request.assigned_machine_id &&
+        (request.status || "").toLowerCase() === "lefoglalva"
+
+      if (isReserved && request.assigned_machine_id && !map.has(request.assigned_machine_id)) {
+        map.set(request.assigned_machine_id, request)
+      }
+    }
+
+    return map
+  }, [requests])
+
+  const activeCustomerRows = useMemo<ActiveCustomerRow[]>(() => {
+    const rows: ActiveCustomerRow[] = []
+
+    for (const machine of machines) {
+      if (!machine.current_customer) continue
+
+      const matchedCustomer = customers.find((customer) => {
+        if (!customer.name) return false
+
+        return (
+          customer.name.trim().toLowerCase() ===
+          machine.current_customer!.trim().toLowerCase()
+        )
+      })
+
+      if (matchedCustomer) {
+        rows.push({
+          customer: matchedCustomer,
+          machine,
+          rental: activeRentalsByMachineId.get(machine.id),
+        })
+      }
+    }
+
+    return rows
+  }, [customers, machines, activeRentalsByMachineId])
+
+  const expiringSoonMachines = useMemo(() => {
+    return machines.filter((m) => {
+      const days = getDaysUntil(m.rental_end)
+      return isStatus(m, "Kiadva") && days !== null && days >= 0 && days <= 4
+    })
+  }, [machines])
+
+  const overdueMachines = useMemo(() => {
+    return machines.filter((m) => {
+      const days = getDaysUntil(m.rental_end)
+      return isStatus(m, "Kiadva") && days !== null && days < 0
+    })
+  }, [machines])
+
+  const waitingRequests = useMemo(() => {
+    return requests.filter((r) => (r.status || "").toLowerCase() === "várakozik")
+  }, [requests])
+
+  const reservedRequests = useMemo(() => {
+    return requests.filter((r) => (r.status || "").toLowerCase() === "lefoglalva")
+  }, [requests])
+
+  const stats = useMemo(() => {
+    const total = machines.length
+    const rented = machines.filter((m) => isStatus(m, "Kiadva")).length
+    const free = machines.filter((m) => isStatus(m, "Szabad")).length
+    const reserved = machines.filter((m) => isStatus(m, "Lefoglalt")).length
+    const repair = machines.filter((m) => isStatus(m, "Javítás alatt")).length
+    const totalDebt = rentals
+      .filter((r) => r.status === "Aktív")
+      .reduce((sum, r) => sum + (r.tartozas || 0), 0)
+
+    return {
+      total,
+      rented,
+      free,
+      reserved,
+      repair,
+      waiting: waitingRequests.length,
+      expiringSoon: expiringSoonMachines.length,
+      overdue: overdueMachines.length,
+      totalDebt,
+    }
+  }, [machines, rentals, waitingRequests.length, expiringSoonMachines.length, overdueMachines.length])
+
+  if (loading) {
+    return (
+      <main style={pageStyle}>
+        <div style={topBarStyle}>
+          <h1 style={{ margin: 0, fontSize: 22 }}>CPMRent Mobil</h1>
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={{ marginTop: 0 }}>Betöltés...</h2>
+          <p style={{ color: "#6b7280", marginBottom: 0 }}>
+            Adatok szinkronizálása folyamatban.
+          </p>
+        </div>
+      </main>
+    )
+  }
+
+  return (
+    <main style={pageStyle}>
+      <div style={topBarStyle}>
+        <div>
+          <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
+            Mobil nézet
+          </div>
+          <h1 style={{ margin: 0, fontSize: 24 }}>CPMRent Admin</h1>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Link href="/" style={secondaryLinkStyle}>
+            Klasszik nézet
+          </Link>
+          <button onClick={logout} style={dangerButtonStyle}>
+            Kilépés
+          </button>
+        </div>
+      </div>
+
+      <div style={statsGridStyle}>
+        <StatCard title="Összes gép" value={stats.total} />
+        <StatCard title="Kiadva" value={stats.rented} color="#1d4ed8" />
+        <StatCard title="Szabad" value={stats.free} color="#16a34a" />
+        <StatCard title="Lejáró" value={stats.expiringSoon} color="#d97706" />
+        <StatCard title="Lejárt" value={stats.overdue} color="#dc2626" />
+        <StatCard title="Várólista" value={stats.waiting} color="#7c3aed" />
+        <StatCard title="Tartozás" value={formatMoney(stats.totalDebt)} color="#dc2626" />
+      </div>
+
+      <div style={tabsWrapStyle}>
+        <button
+          onClick={() => setActiveTab("overview")}
+          style={activeTab === "overview" ? tabActiveStyle : tabStyle}
+        >
+          Áttekintés
+        </button>
+        <button
+          onClick={() => setActiveTab("machines")}
+          style={activeTab === "machines" ? tabActiveStyle : tabStyle}
+        >
+          Gépek
+        </button>
+        <button
+          onClick={() => setActiveTab("requests")}
+          style={activeTab === "requests" ? tabActiveStyle : tabStyle}
+        >
+          Várólista
+        </button>
+        <button
+          onClick={() => setActiveTab("customers")}
+          style={activeTab === "customers" ? tabActiveStyle : tabStyle}
+        >
+          Aktív bérlők
+        </button>
+      </div>
+
+      {activeTab === "overview" && (
+        <>
+          <SectionTitle
+            title="Hamarosan felszabaduló gépek"
+            subtitle="4 napon belül lejáró kiadott gépek"
+          />
+
+          {expiringSoonMachines.length === 0 ? (
+            <EmptyCard text="Nincs 4 napon belül lejáró gép." />
+          ) : (
+            expiringSoonMachines.map((machine) => {
+              const nextRequest = nextRequestsByMachineId.get(machine.id)
+              const days = getDaysUntil(machine.rental_end)
+
+              return (
+                <Card key={machine.id}>
+                  <CardHeader
+                    title={machine.name || "Ismeretlen gép"}
+                    badge={machine.status || "-"}
+                    badgeStyle={getStatusBadgeStyle(machine.status)}
+                  />
+
+                  <InfoRow label="Aktuális bérlő" value={machine.current_customer || "-"} />
+                  <InfoRow label="Lejárat" value={machine.rental_end || "-"} />
+                  <InfoRow
+                    label="Hátralévő idő"
+                    value={
+                      days === null
+                        ? "-"
+                        : days === 0
+                        ? "Ma jár le"
+                        : `${days} nap múlva`
+                    }
+                    valueColor="#d97706"
+                  />
+                  <InfoRow label="Lokáció" value={machine.location || "-"} />
+                  <InfoRow
+                    label="Következő ügyfél"
+                    value={nextRequest?.name || "Nincs lefoglalva"}
+                    valueColor={nextRequest ? "#7c3aed" : "#111827"}
+                  />
+                </Card>
+              )
+            })
+          )}
+
+          <SectionTitle
+            title="Lejárt gépek"
+            subtitle="Azonnali operációs figyelmet igényel"
+          />
+
+          {overdueMachines.length === 0 ? (
+            <EmptyCard text="Nincs lejárt bérlés." />
+          ) : (
+            overdueMachines.map((machine) => {
+              const days = getDaysUntil(machine.rental_end)
+
+              return (
+                <Card key={machine.id}>
+                  <CardHeader
+                    title={machine.name || "Ismeretlen gép"}
+                    badge="Lejárt"
+                    badgeStyle={dangerBadgeStyle}
+                  />
+
+                  <InfoRow label="Bérlő" value={machine.current_customer || "-"} />
+                  <InfoRow label="Lejárat" value={machine.rental_end || "-"} />
+                  <InfoRow
+                    label="Státusz"
+                    value={
+                      days !== null ? `${Math.abs(days)} napja lejárt` : "Lejárt"
+                    }
+                    valueColor="#dc2626"
+                  />
+                  <InfoRow label="Lokáció" value={machine.location || "-"} />
+                </Card>
+              )
+            })
+          )}
+        </>
+      )}
+
+      {activeTab === "machines" && (
+        <>
+          <SectionTitle
+            title="Gépek mobil nézetben"
+            subtitle="Aktuális állapot, tartozás és következő ügyfél"
+          />
+
+          {machines.map((machine) => {
+            const activeRental = activeRentalsByMachineId.get(machine.id)
+            const nextRequest = nextRequestsByMachineId.get(machine.id)
+            const days = getDaysUntil(machine.rental_end)
+            const debt = activeRental?.tartozas || 0
+
+            return (
+              <Card key={machine.id}>
+                <CardHeader
+                  title={machine.name || "Ismeretlen gép"}
+                  badge={machine.status || "-"}
+                  badgeStyle={getStatusBadgeStyle(machine.status)}
+                />
+
+                <InfoRow label="Típus" value={machine.type || "-"} />
+                <InfoRow label="Bérlő" value={machine.current_customer || "-"} />
+                <InfoRow label="Lokáció" value={machine.location || "-"} />
+                <InfoRow label="Lejárat" value={machine.rental_end || "-"} />
+                <InfoRow
+                  label="Napok"
+                  value={
+                    days === null
+                      ? "-"
+                      : days < 0
+                      ? `${Math.abs(days)} napja lejárt`
+                      : days === 0
+                      ? "Ma jár le"
+                      : `${days} nap múlva`
+                  }
+                  valueColor={days !== null && days <= 4 ? "#d97706" : "#111827"}
+                />
+                <InfoRow
+                  label="Visszaszállítás"
+                  value={activeRental?.visszaszallitas_modja || "-"}
+                />
+                <InfoRow
+                  label="Tartozás"
+                  value={formatMoney(debt)}
+                  valueColor={debt > 0 ? "#dc2626" : "#16a34a"}
+                />
+                <InfoRow
+                  label="Következő ügyfél"
+                  value={nextRequest?.name || "Nincs lefoglalva"}
+                  valueColor={nextRequest ? "#7c3aed" : "#111827"}
+                />
+              </Card>
+            )
+          })}
+        </>
+      )}
+
+      {activeTab === "requests" && (
+        <>
+          <SectionTitle
+            title="Várólista"
+            subtitle="Prioritás, státusz és géphez rendelés mobil nézetben"
+          />
+
+          {requests.length === 0 ? (
+            <EmptyCard text="Nincs várakozó ügyfél." />
+          ) : (
+            requests.map((request) => {
+              const machine =
+                machines.find((m) => m.id === request.assigned_machine_id) || null
+
+              return (
+                <Card key={request.id}>
+                  <CardHeader
+                    title={request.name || "Névtelen ügyfél"}
+                    badge={request.status || "-"}
+                    badgeStyle={getStatusBadgeStyle(request.status)}
+                  />
+
+                  <InfoRow label="Telefon" value={request.phone || "-"} />
+                  <InfoRow label="Email" value={request.email || "-"} />
+                  <InfoRow label="Város" value={request.city || "-"} />
+                  <InfoRow
+                    label="Prioritás"
+                    value={request.priority?.toString() || "-"}
+                    valueColor={(request.priority || 99) <= 1 ? "#dc2626" : "#111827"}
+                  />
+                  <InfoRow
+                    label="Kért kezdés"
+                    value={request.requested_start_date || "-"}
+                  />
+                  <InfoRow
+                    label="Napok száma"
+                    value={request.requested_duration_days?.toString() || "-"}
+                  />
+                  <InfoRow
+                    label="Kijelölt gép"
+                    value={machine?.name || "Nincs kijelölve"}
+                    valueColor={machine ? "#7c3aed" : "#111827"}
+                  />
+                  <InfoRow label="Megjegyzés" value={request.notes || "-"} />
+                </Card>
+              )
+            })
+          )}
+
+          <SectionTitle
+            title="Következőre lefoglalt ügyfelek"
+            subtitle="Már géphez párosított, de még nem aktív bérlések"
+          />
+
+          {reservedRequests.length === 0 ? (
+            <EmptyCard text="Nincs előfoglalás." />
+          ) : (
+            reservedRequests.map((request) => {
+              const machine =
+                machines.find((m) => m.id === request.assigned_machine_id) || null
+
+              return (
+                <Card key={`reserved-${request.id}`}>
+                  <CardHeader
+                    title={request.name || "Névtelen ügyfél"}
+                    badge="Lefoglalva"
+                    badgeStyle={reservedBadgeStyle}
+                  />
+
+                  <InfoRow label="Gép" value={machine?.name || "-"} />
+                  <InfoRow label="Aktuális státusz" value={machine?.status || "-"} />
+                  <InfoRow label="Város" value={request.city || "-"} />
+                  <InfoRow label="Kért kezdés" value={request.requested_start_date || "-"} />
+                </Card>
+              )
+            })
+          )}
+        </>
+      )}
+
+      {activeTab === "customers" && (
+        <>
+          <SectionTitle
+            title="Aktív bérlők"
+            subtitle="Gyors mobil áttekintés bérlőnként"
+          />
+
+          {activeCustomerRows.length === 0 ? (
+            <EmptyCard text="Nincs aktív bérlő." />
+          ) : (
+            activeCustomerRows.map((row) => {
+              const debt = row.rental?.tartozas || 0
+
+              return (
+                <Card key={`${row.customer.id}-${row.machine.id}`}>
+                  <CardHeader
+                    title={row.customer.name || "Ismeretlen bérlő"}
+                    badge={row.machine.name || "Gép"}
+                    badgeStyle={machineBadgeStyle}
+                  />
+
+                  <InfoRow label="Telefon" value={row.customer.phone || "-"} />
+                  <InfoRow label="Email" value={row.customer.email || "-"} />
+                  <InfoRow label="Város" value={row.customer.city || "-"} />
+                  <InfoRow label="Cím" value={row.customer.address || "-"} />
+                  <InfoRow label="Lejárat" value={row.machine.rental_end || "-"} />
+                  <InfoRow
+                    label="Visszaszállítás"
+                    value={row.rental?.visszaszallitas_modja || "-"}
+                  />
+                  <InfoRow
+                    label="Tartozás"
+                    value={formatMoney(debt)}
+                    valueColor={debt > 0 ? "#dc2626" : "#16a34a"}
+                  />
+                </Card>
+              )
+            })
+          )}
+        </>
+      )}
+    </main>
+  )
+}
+
+function SectionTitle({
+  title,
+  subtitle,
+}: {
+  title: string
+  subtitle?: string
+}) {
+  return (
+    <div style={{ marginTop: 20, marginBottom: 12 }}>
+      <h2 style={{ margin: 0, fontSize: 20 }}>{title}</h2>
+      {subtitle ? (
+        <p style={{ margin: "6px 0 0", color: "#6b7280", fontSize: 14 }}>{subtitle}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function EmptyCard({ text }: { text: string }) {
+  return (
+    <div style={emptyCardStyle}>
+      <p style={{ margin: 0, color: "#6b7280" }}>{text}</p>
+    </div>
+  )
+}
+
+function Card({ children }: { children: React.ReactNode }) {
+  return <div style={cardStyle}>{children}</div>
+}
+
+function CardHeader({
+  title,
+  badge,
+  badgeStyle,
+}: {
+  title: string
+  badge: string
+  badgeStyle: React.CSSProperties
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "flex-start",
+        gap: 12,
+        marginBottom: 14,
+      }}
+    >
+      <div style={{ fontWeight: 700, fontSize: 18, lineHeight: 1.2 }}>{title}</div>
+      <span
+        style={{
+          ...badgePillStyle,
+          ...badgeStyle,
+        }}
+      >
+        {badge}
+      </span>
+    </div>
+  )
+}
+
+function InfoRow({
+  label,
+  value,
+  valueColor,
+}: {
+  label: string
+  value: string
+  valueColor?: string
+}) {
+  return (
+    <div style={infoRowStyle}>
+      <div style={infoLabelStyle}>{label}</div>
+      <div
+        style={{
+          ...infoValueStyle,
+          color: valueColor || "#111827",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function StatCard({
+  title,
+  value,
+  color = "#111827",
+}: {
+  title: string
+  value: React.ReactNode
+  color?: string
+}) {
+  return (
+    <div style={statCardStyle}>
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+    </div>
+  )
+}
+
+const pageStyle: React.CSSProperties = {
+  minHeight: "100vh",
+  background: "#f3f4f6",
+  padding: "16px 14px 90px",
+  fontFamily: "Inter, Arial, sans-serif",
+}
+
+const topBarStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 12,
+  marginBottom: 16,
+  flexWrap: "wrap",
+}
+
+const statsGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 10,
+}
+
+const statCardStyle: React.CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 18,
+  padding: 14,
+  boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
+}
+
+const tabsWrapStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+  marginTop: 16,
+  marginBottom: 8,
+}
+
+const tabStyle: React.CSSProperties = {
+  border: "1px solid #d1d5db",
+  background: "#ffffff",
+  color: "#111827",
+  borderRadius: 14,
+  padding: "12px 10px",
+  fontWeight: 700,
+  fontSize: 14,
+  cursor: "pointer",
+}
+
+const tabActiveStyle: React.CSSProperties = {
+  ...tabStyle,
+  background: "#111827",
+  color: "#ffffff",
+  border: "1px solid #111827",
+}
+
+const cardStyle: React.CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 20,
+  padding: 16,
+  marginBottom: 12,
+  boxShadow: "0 4px 14px rgba(0,0,0,0.06)",
+}
+
+const emptyCardStyle: React.CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 18,
+  padding: 16,
+  marginBottom: 12,
+  boxShadow: "0 4px 14px rgba(0,0,0,0.04)",
+}
+
+const badgePillStyle: React.CSSProperties = {
+  borderRadius: 999,
+  padding: "6px 10px",
+  fontSize: 12,
+  fontWeight: 700,
+  whiteSpace: "nowrap",
+}
+
+const infoRowStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  padding: "8px 0",
+  borderBottom: "1px solid #f3f4f6",
+  alignItems: "flex-start",
+}
+
+const infoLabelStyle: React.CSSProperties = {
+  fontSize: 13,
+  color: "#6b7280",
+  minWidth: 110,
+}
+
+const infoValueStyle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  textAlign: "right",
+  wordBreak: "break-word",
+}
+
+const sectionStyle: React.CSSProperties = {
+  background: "#fff",
+  borderRadius: 18,
+  padding: 18,
+  boxShadow: "0 4px 14px rgba(0,0,0,0.05)",
+}
+
+const secondaryLinkStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "#ffffff",
+  color: "#111827",
+  textDecoration: "none",
+  fontWeight: 700,
+  border: "1px solid #d1d5db",
+}
+
+const dangerButtonStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "none",
+  background: "#dc2626",
+  color: "#fff",
+  fontWeight: 700,
+  cursor: "pointer",
+}
+
+const dangerBadgeStyle: React.CSSProperties = {
+  background: "#fee2e2",
+  color: "#b91c1c",
+  border: "1px solid #fecaca",
+}
+
+const reservedBadgeStyle: React.CSSProperties = {
+  background: "#ede9fe",
+  color: "#6d28d9",
+  border: "1px solid #ddd6fe",
+}
+
+const machineBadgeStyle: React.CSSProperties = {
+  background: "#e0f2fe",
+  color: "#0369a1",
+  border: "1px solid #bae6fd",
+}
