@@ -212,6 +212,9 @@ export default function Dashboard() {
   const [machineStatusSelections, setMachineStatusSelections] = useState<Record<string, string>>({})
   const [rentalEndSelections, setRentalEndSelections] = useState<Record<string, string>>({})
   const [updatingRentalId, setUpdatingRentalId] = useState<string | null>(null)
+  const [rentalDebtSelections, setRentalDebtSelections] = useState<Record<string, string>>({})
+  const [rentalReturnModeSelections, setRentalReturnModeSelections] = useState<Record<string, string>>({})
+  const [savingRentalDetailsId, setSavingRentalDetailsId] = useState<string | null>(null)
 
   useEffect(() => {
     checkUser()
@@ -867,7 +870,73 @@ export default function Dashboard() {
     }
   }
 
-  async function handleUpdateMachineStatus(machineId: string) {
+  
+async function handleSaveRentalDetails(machine: Machine) {
+  const activeRental = activeRentalByMachineId[machine.id]
+
+  if (!activeRental?.id) {
+    alert("Ehhez a géphez nincs aktív bérlés.")
+    return
+  }
+
+  const rawDebtValue =
+    rentalDebtSelections[machine.id] !== undefined
+      ? rentalDebtSelections[machine.id]
+      : String(activeRental.tartozas ?? 0)
+
+  const parsedDebt = Number(rawDebtValue)
+
+  if (Number.isNaN(parsedDebt) || parsedDebt < 0) {
+    alert("A tartozás csak 0 vagy pozitív szám lehet.")
+    return
+  }
+
+  const selectedReturnMode =
+    rentalReturnModeSelections[machine.id] ??
+    activeRental.visszaszallitas_modja ??
+    "Én megyek érte"
+
+  const updatePayload: {
+    tartozas: number
+    visszaszallitas_modja: string
+    fizetett_osszeg?: number
+  } = {
+    tartozas: parsedDebt,
+    visszaszallitas_modja: selectedReturnMode,
+  }
+
+  if (typeof activeRental.berleti_dij === "number") {
+    updatePayload.fizetett_osszeg = Math.max(activeRental.berleti_dij - parsedDebt, 0)
+  }
+
+  setSavingRentalDetailsId(machine.id)
+
+  try {
+    const { error } = await supabase
+      .from("rentals")
+      .update(updatePayload)
+      .eq("id", activeRental.id)
+
+    if (error) {
+      throw error
+    }
+
+    await fetchRentals()
+    alert("A bérlés tartozása és visszaszállítása sikeresen frissítve.")
+  } catch (error: any) {
+    console.error("Hiba a bérlés adatainak frissítésekor:", error)
+    alert(
+      getSupabaseErrorMessage(
+        error,
+        "Nem sikerült frissíteni a bérlés tartozását és visszaszállítását."
+      )
+    )
+  } finally {
+    setSavingRentalDetailsId(null)
+  }
+}
+
+async function handleUpdateMachineStatus(machineId: string) {
     const selectedStatus = machineStatusSelections[machineId]
 
     if (!selectedStatus) {
@@ -1871,6 +1940,8 @@ export default function Dashboard() {
               <th style={cellStyle}>Lejárat</th>
               <th style={cellStyle}>Visszaszállítás</th>
               <th style={cellStyle}>Tartozás</th>
+              <th style={cellStyle}>Új visszaszállítás</th>
+              <th style={cellStyle}>Új tartozás</th>
               <th style={cellStyle}>Új lejárat</th>
               <th style={cellStyle}>Új státusz</th>
               <th style={cellStyle}>Művelet</th>
@@ -1925,6 +1996,54 @@ export default function Dashboard() {
                   {activeRentalByMachineId[m.id]?.tartozas
                     ? `${activeRentalByMachineId[m.id]!.tartozas!.toLocaleString("hu-HU")} Ft`
                     : "0 Ft"}
+                </td>
+
+                <td style={cellStyle}>
+                  {activeRentalByMachineId[m.id] ? (
+                    <select
+                      value={
+                        rentalReturnModeSelections[m.id] ??
+                        activeRentalByMachineId[m.id]?.visszaszallitas_modja ??
+                        "Én megyek érte"
+                      }
+                      onChange={(e) =>
+                        setRentalReturnModeSelections((prev) => ({
+                          ...prev,
+                          [m.id]: e.target.value,
+                        }))
+                      }
+                      style={inputStyle}
+                    >
+                      <option value="Én megyek érte">Én megyek érte</option>
+                      <option value="Visszahozza">Visszahozza</option>
+                      <option value="Futár">Futár</option>
+                    </select>
+                  ) : (
+                    "-"
+                  )}
+                </td>
+
+                <td style={cellStyle}>
+                  {activeRentalByMachineId[m.id] ? (
+                    <input
+                      type="number"
+                      min="0"
+                      step="1000"
+                      value={
+                        rentalDebtSelections[m.id] ??
+                        String(activeRentalByMachineId[m.id]?.tartozas ?? 0)
+                      }
+                      onChange={(e) =>
+                        setRentalDebtSelections((prev) => ({
+                          ...prev,
+                          [m.id]: e.target.value,
+                        }))
+                      }
+                      style={inputStyle}
+                    />
+                  ) : (
+                    "-"
+                  )}
                 </td>
 
                 <td style={cellStyle}>
@@ -1998,6 +2117,24 @@ export default function Dashboard() {
                         }}
                       >
                         {updatingRentalId === m.id ? "Mentés..." : "Lejárat módosítása"}
+                      </button>
+                    )}
+
+                    {activeRentalByMachineId[m.id] && (
+                      <button
+                        type="button"
+                        onClick={() => handleSaveRentalDetails(m)}
+                        disabled={savingRentalDetailsId === m.id}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: "8px",
+                          border: "1px solid #ddd",
+                          background: "#d9f8e5",
+                          cursor: "pointer",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        {savingRentalDetailsId === m.id ? "Mentés..." : "Bérlés adatok mentése"}
                       </button>
                     )}
 
