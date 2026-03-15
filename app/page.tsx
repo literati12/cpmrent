@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { supabase } from "../lib/supabaseClient"
 
@@ -361,7 +362,6 @@ export default function Dashboard() {
   }
 
   // --- KEZELŐ FÜGGVÉNYEK ---
-
   async function handleAddCustomer(e: React.MouseEvent | React.FormEvent) {
     e.preventDefault()
     setCustomerMessage("")
@@ -535,29 +535,8 @@ export default function Dashboard() {
     }
 
     try {
-      const rentalInsert = await supabase
-        .from("rentals")
-        .insert([rentalPayload])
-        .select()
-
-      if (rentalInsert.error) {
-        console.error("Hiba bérlés mentésekor:", {
-          raw: rentalInsert.error,
-          rentalPayload,
-          message: rentalInsert.error.message,
-          details: rentalInsert.error.details,
-          hint: rentalInsert.error.hint,
-          code: rentalInsert.error.code,
-        })
-
-        setRentalMessage(
-          getSupabaseErrorMessage(
-            rentalInsert.error,
-            "Hiba történt a bérlés rögzítése közben."
-          )
-        )
-        return
-      }
+      const rentalInsert = await supabase.from("rentals").insert([rentalPayload]).select()
+      if (rentalInsert.error) throw rentalInsert.error
 
       const machineUpdate = await supabase
         .from("machines")
@@ -565,24 +544,7 @@ export default function Dashboard() {
         .eq("id", rentalForm.machine_id)
         .select()
 
-      if (machineUpdate.error) {
-        console.error("Hiba a gép frissítésekor bérlés után:", {
-          raw: machineUpdate.error,
-          machinePayload,
-          message: machineUpdate.error.message,
-          details: machineUpdate.error.details,
-          hint: machineUpdate.error.hint,
-          code: machineUpdate.error.code,
-        })
-
-        setRentalMessage(
-          getSupabaseErrorMessage(
-            machineUpdate.error,
-            "A bérlés mentve lett, de a gép frissítése nem sikerült."
-          )
-        )
-        return
-      }
+      if (machineUpdate.error) throw machineUpdate.error
 
       setRentalMessage("Bérlés rögzítve.")
       setRentalForm(initialRentalForm)
@@ -590,12 +552,7 @@ export default function Dashboard() {
       await Promise.all([fetchMachines(), fetchRentals()])
     } catch (error: any) {
       console.error("Váratlan hiba bérlés rögzítés közben:", error)
-      setRentalMessage(
-        getSupabaseErrorMessage(
-          error,
-          "Váratlan hiba történt a bérlés rögzítése közben."
-        )
-      )
+      setRentalMessage(getSupabaseErrorMessage(error, "Váratlan hiba történt a bérlés rögzítése közben."))
     } finally {
       setSavingRental(false)
     }
@@ -604,7 +561,6 @@ export default function Dashboard() {
   async function handleAddRequest(e: React.FormEvent) {
     e.preventDefault()
     setRequestMessage("")
-
     if (!requestForm.name.trim()) {
       setRequestMessage("A várakozó neve kötelező.")
       return
@@ -619,8 +575,7 @@ export default function Dashboard() {
       city: requestForm.city.trim() || null,
       address: requestForm.address.trim() || null,
       requested_start_date: requestForm.requested_start_date || null,
-      requested_duration_days:
-        Number(requestForm.requested_duration_days || 0) || null,
+      requested_duration_days: Number(requestForm.requested_duration_days || 0) || null,
       status: requestForm.status || "várakozik",
       priority: Number(requestForm.priority || 1) || 1,
       notes: requestForm.notes.trim() || null,
@@ -628,22 +583,7 @@ export default function Dashboard() {
 
     try {
       const { error } = await supabase.from("requests").insert([payload])
-
-      if (error) {
-        console.error("Hiba várakozó mentése közben:", {
-          raw: error,
-          payload,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        })
-
-        setRequestMessage(
-          getSupabaseErrorMessage(error, "Hiba történt a várakozó mentésénél.")
-        )
-        return
-      }
+      if (error) throw error
 
       setRequestMessage("Várakozó sikeresen rögzítve.")
       setRequestForm(initialRequestForm)
@@ -651,12 +591,7 @@ export default function Dashboard() {
       await fetchRequests()
     } catch (error: any) {
       console.error("Váratlan hiba várakozó mentés közben:", error)
-      setRequestMessage(
-        getSupabaseErrorMessage(
-          error,
-          "Váratlan hiba történt várakozó mentés közben."
-        )
-      )
+      setRequestMessage(getSupabaseErrorMessage(error, "Váratlan hiba történt várakozó mentés közben."))
     } finally {
       setSavingRequest(false)
     }
@@ -666,16 +601,11 @@ export default function Dashboard() {
     const confirmed = window.confirm("Biztosan visszamondta státuszra állítod?")
     if (!confirmed) return
 
-    const { error } = await supabase
-      .from("requests")
-      .update({ status: "visszamondta" })
-      .eq("id", requestId)
-
+    const { error } = await supabase.from("requests").update({ status: "visszamondta" }).eq("id", requestId)
     if (error) {
       alert(getSupabaseErrorMessage(error, "Nem sikerült frissíteni a státuszt."))
       return
     }
-
     await fetchRequests()
   }
 
@@ -684,38 +614,22 @@ export default function Dashboard() {
     if (!confirmed) return
 
     const { error } = await supabase.from("requests").delete().eq("id", requestId)
-
     if (error) {
       alert(getSupabaseErrorMessage(error, "Nem sikerült törölni a várakozót."))
       return
     }
-
     await fetchRequests()
   }
 
   async function handleAssignRequestToMachine(request: RequestItem) {
     const selectedMachineId = requestMachineSelections[request.id]
-
-    if (!selectedMachineId) {
-      alert("Először válassz gépet a várakozóhoz.")
-      return
-    }
+    if (!selectedMachineId) return alert("Először válassz gépet a várakozóhoz.")
 
     const selectedMachine = machines.find((m) => m.id === selectedMachineId)
-
-    if (!selectedMachine) {
-      alert("A kiválasztott gép nem található.")
-      return
-    }
-
-    if (!request.name?.trim()) {
-      alert("A várakozó neve hiányzik.")
-      return
-    }
-
+    if (!selectedMachine) return alert("A kiválasztott gép nem található.")
+    if (!request.name?.trim()) return alert("A várakozó neve hiányzik.")
     if (!request.requested_start_date || !request.requested_duration_days) {
-      alert("Hiányzik az igény kezdete vagy az időtartam.")
-      return
+      return alert("Hiányzik az igény kezdete vagy az időtartam.")
     }
 
     setAssigningRequestId(request.id)
@@ -730,18 +644,12 @@ export default function Dashboard() {
         notes: request.notes?.trim() || null,
       }
 
-      const customerInsert = await supabase
-        .from("customers")
-        .insert([customerPayload])
-        .select()
-        .single()
-
+      const customerInsert = await supabase.from("customers").insert([customerPayload]).select().single()
       if (customerInsert.error || !customerInsert.data) {
         throw customerInsert.error || new Error("Nem sikerült létrehozni a bérlőt.")
       }
 
       const newCustomer = customerInsert.data
-
       const start = parseLocalDate(request.requested_start_date)
       const end = new Date(start)
       end.setDate(end.getDate() + Number(request.requested_duration_days))
@@ -760,14 +668,8 @@ export default function Dashboard() {
         note: request.notes?.trim() || null,
       }
 
-      const rentalInsert = await supabase
-        .from("rentals")
-        .insert([rentalPayload])
-        .select()
-
-      if (rentalInsert.error) {
-        throw rentalInsert.error
-      }
+      const rentalInsert = await supabase.from("rentals").insert([rentalPayload]).select()
+      if (rentalInsert.error) throw rentalInsert.error
 
       const machinePayload = {
         status: "Kiadva",
@@ -777,27 +679,14 @@ export default function Dashboard() {
         location: newCustomer.city || selectedMachine.location,
       }
 
-      const machineUpdate = await supabase
-        .from("machines")
-        .update(machinePayload)
-        .eq("id", selectedMachineId)
-        .select()
-
-      if (machineUpdate.error) {
-        throw machineUpdate.error
-      }
+      const machineUpdate = await supabase.from("machines").update(machinePayload).eq("id", selectedMachineId).select()
+      if (machineUpdate.error) throw machineUpdate.error
 
       const requestUpdate = await supabase
         .from("requests")
-        .update({
-          status: "aktív",
-          assigned_machine_id: selectedMachineId,
-        })
+        .update({ status: "aktív", assigned_machine_id: selectedMachineId })
         .eq("id", request.id)
-
-      if (requestUpdate.error) {
-        throw requestUpdate.error
-      }
+      if (requestUpdate.error) throw requestUpdate.error
 
       await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests(), fetchRentals()])
       alert("A várakozóból sikeresen aktív bérlő lett.")
@@ -811,48 +700,24 @@ export default function Dashboard() {
 
   async function handleReserveRequestToMachine(request: RequestItem) {
     const selectedMachineId = requestMachineSelections[request.id]
-
-    if (!selectedMachineId) {
-      alert("Először válassz gépet a várakozóhoz.")
-      return
-    }
+    if (!selectedMachineId) return alert("Először válassz gépet a várakozóhoz.")
 
     const selectedMachine = machines.find((m) => m.id === selectedMachineId)
-
-    if (!selectedMachine) {
-      alert("A kiválasztott gép nem található.")
-      return
-    }
-
-    if (!isMachineReservableForNext(selectedMachine)) {
-      alert("Erre a gépre most nem lehet előfoglalást tenni.")
-      return
-    }
+    if (!selectedMachine) return alert("A kiválasztott gép nem található.")
+    if (!isMachineReservableForNext(selectedMachine)) return alert("Erre a gépre most nem lehet előfoglalást tenni.")
 
     setReservingRequestId(request.id)
 
     try {
       const requestUpdate = await supabase
         .from("requests")
-        .update({
-          status: "lefoglalva",
-          assigned_machine_id: selectedMachineId,
-        })
+        .update({ status: "lefoglalva", assigned_machine_id: selectedMachineId })
         .eq("id", request.id)
-
-      if (requestUpdate.error) {
-        throw requestUpdate.error
-      }
+      if (requestUpdate.error) throw requestUpdate.error
 
       if (isMachineImmediatelyAssignable(selectedMachine)) {
-        const machineUpdate = await supabase
-          .from("machines")
-          .update({ status: "Lefoglalt" })
-          .eq("id", selectedMachineId)
-
-        if (machineUpdate.error) {
-          throw machineUpdate.error
-        }
+        const machineUpdate = await supabase.from("machines").update({ status: "Lefoglalt" }).eq("id", selectedMachineId)
+        if (machineUpdate.error) throw machineUpdate.error
       }
 
       await Promise.all([fetchMachines(), fetchRequests()])
@@ -867,20 +732,10 @@ export default function Dashboard() {
 
   async function handleUpdateRentalEnd(machine: Machine) {
     const newEndDate = rentalEndSelections[machine.id] || machine.rental_end
-
-    if (!newEndDate) {
-      alert("Adj meg új lejárati dátumot.")
-      return
-    }
-
-    if (!machine.current_customer) {
-      alert("Ehhez a géphez nincs aktív bérlő.")
-      return
-    }
-
+    if (!newEndDate) return alert("Adj meg új lejárati dátumot.")
+    if (!machine.current_customer) return alert("Ehhez a géphez nincs aktív bérlő.")
     if (machine.rental_start && newEndDate < machine.rental_start) {
-      alert("Az új lejárat nem lehet korábbi, mint a kezdő dátum.")
-      return
+      return alert("Az új lejárat nem lehet korábbi, mint a kezdő dátum.")
     }
 
     setUpdatingRentalId(machine.id)
@@ -893,125 +748,78 @@ export default function Dashboard() {
         .eq("status", "Aktív")
         .order("start_date", { ascending: false })
         .limit(1)
-
-      if (activeRentalQuery.error) {
-        throw activeRentalQuery.error
-      }
+      if (activeRentalQuery.error) throw activeRentalQuery.error
 
       const activeRental = activeRentalQuery.data?.[0]
+      if (!activeRental?.id) throw new Error("Nem található aktív bérlés ehhez a géphez.")
 
-      if (!activeRental?.id) {
-        throw new Error("Nem található aktív bérlés ehhez a géphez.")
-      }
+      const rentalUpdate = await supabase.from("rentals").update({ end_date: newEndDate }).eq("id", activeRental.id)
+      if (rentalUpdate.error) throw rentalUpdate.error
 
-      const rentalUpdate = await supabase
-        .from("rentals")
-        .update({ end_date: newEndDate })
-        .eq("id", activeRental.id)
+      const machineUpdate = await supabase.from("machines").update({ rental_end: newEndDate }).eq("id", machine.id)
+      if (machineUpdate.error) throw machineUpdate.error
 
-      if (rentalUpdate.error) {
-        throw rentalUpdate.error
-      }
-
-      const machineUpdate = await supabase
-        .from("machines")
-        .update({ rental_end: newEndDate })
-        .eq("id", machine.id)
-
-      if (machineUpdate.error) {
-        throw machineUpdate.error
-      }
-
-      setRentalEndSelections((prev) => ({
-        ...prev,
-        [machine.id]: newEndDate,
-      }))
-
+      setRentalEndSelections((prev) => ({ ...prev, [machine.id]: newEndDate }))
       await fetchMachines()
       alert("A bérlés lejárata sikeresen módosítva.")
     } catch (error: any) {
       console.error("Hiba lejárat módosítása közben:", error)
-      alert(
-        getSupabaseErrorMessage(error, "Nem sikerült módosítani a bérlés lejáratát.")
-      )
+      alert(getSupabaseErrorMessage(error, "Nem sikerült módosítani a bérlés lejáratát."))
     } finally {
       setUpdatingRentalId(null)
     }
   }
 
-  
-async function handleSaveRentalDetails(machine: Machine) {
-  const activeRental = activeRentalByMachineId[machine.id]
+  async function handleSaveRentalDetails(machine: Machine) {
+    const activeRental = activeRentalByMachineId[machine.id]
+    if (!activeRental?.id) return alert("Ehhez a géphez nincs aktív bérlés.")
 
-  if (!activeRental?.id) {
-    alert("Ehhez a géphez nincs aktív bérlés.")
-    return
-  }
+    const rawDebtValue =
+      rentalDebtSelections[machine.id] !== undefined
+        ? rentalDebtSelections[machine.id]
+        : String(activeRental.tartozas ?? 0)
 
-  const rawDebtValue =
-    rentalDebtSelections[machine.id] !== undefined
-      ? rentalDebtSelections[machine.id]
-      : String(activeRental.tartozas ?? 0)
-
-  const parsedDebt = Number(rawDebtValue)
-
-  if (Number.isNaN(parsedDebt) || parsedDebt < 0) {
-    alert("A tartozás csak 0 vagy pozitív szám lehet.")
-    return
-  }
-
-  const selectedReturnMode =
-    rentalReturnModeSelections[machine.id] ??
-    activeRental.visszaszallitas_modja ??
-    "Én megyek érte"
-
-  const updatePayload: {
-    tartozas: number
-    visszaszallitas_modja: string
-    fizetett_osszeg?: number
-  } = {
-    tartozas: parsedDebt,
-    visszaszallitas_modja: selectedReturnMode,
-  }
-
-  if (typeof activeRental.berleti_dij === "number") {
-    updatePayload.fizetett_osszeg = Math.max(activeRental.berleti_dij - parsedDebt, 0)
-  }
-
-  setSavingRentalDetailsId(machine.id)
-
-  try {
-    const { error } = await supabase
-      .from("rentals")
-      .update(updatePayload)
-      .eq("id", activeRental.id)
-
-    if (error) {
-      throw error
+    const parsedDebt = Number(rawDebtValue)
+    if (Number.isNaN(parsedDebt) || parsedDebt < 0) {
+      return alert("A tartozás csak 0 vagy pozitív szám lehet.")
     }
 
-    await fetchRentals()
-    alert("A bérlés tartozása és visszaszállítása sikeresen frissítve.")
-  } catch (error: any) {
-    console.error("Hiba a bérlés adatainak frissítésekor:", error)
-    alert(
-      getSupabaseErrorMessage(
-        error,
-        "Nem sikerült frissíteni a bérlés tartozását és visszaszállítását."
-      )
-    )
-  } finally {
-    setSavingRentalDetailsId(null)
-  }
-}
+    const selectedReturnMode =
+      rentalReturnModeSelections[machine.id] ??
+      activeRental.visszaszallitas_modja ??
+      "Én megyek érte"
 
-async function handleUpdateMachineStatus(machineId: string) {
+    const updatePayload: {
+      tartozas: number
+      visszaszallitas_modja: string
+      fizetett_osszeg?: number
+    } = {
+      tartozas: parsedDebt,
+      visszaszallitas_modja: selectedReturnMode,
+    }
+
+    if (typeof activeRental.berleti_dij === "number") {
+      updatePayload.fizetett_osszeg = Math.max(activeRental.berleti_dij - parsedDebt, 0)
+    }
+
+    setSavingRentalDetailsId(machine.id)
+
+    try {
+      const { error } = await supabase.from("rentals").update(updatePayload).eq("id", activeRental.id)
+      if (error) throw error
+      await fetchRentals()
+      alert("A bérlés tartozása és visszaszállítása sikeresen frissítve.")
+    } catch (error: any) {
+      console.error("Hiba a bérlés adatainak frissítésekor:", error)
+      alert(getSupabaseErrorMessage(error, "Nem sikerült frissíteni a bérlés tartozását és visszaszállítását."))
+    } finally {
+      setSavingRentalDetailsId(null)
+    }
+  }
+
+  async function handleUpdateMachineStatus(machineId: string) {
     const selectedStatus = machineStatusSelections[machineId]
-
-    if (!selectedStatus) {
-      alert("Válassz új státuszt.")
-      return
-    }
+    if (!selectedStatus) return alert("Válassz új státuszt.")
 
     setUpdatingMachineId(machineId)
 
@@ -1021,9 +829,7 @@ async function handleUpdateMachineStatus(machineId: string) {
         current_customer?: string | null
         rental_start?: string | null
         rental_end?: string | null
-      } = {
-        status: selectedStatus,
-      }
+      } = { status: selectedStatus }
 
       if (selectedStatus !== "Kiadva" && selectedStatus !== "Lefoglalt") {
         updatePayload.current_customer = null
@@ -1031,14 +837,8 @@ async function handleUpdateMachineStatus(machineId: string) {
         updatePayload.rental_end = null
       }
 
-      const { error } = await supabase
-        .from("machines")
-        .update(updatePayload)
-        .eq("id", machineId)
-
-      if (error) {
-        throw error
-      }
+      const { error } = await supabase.from("machines").update(updatePayload).eq("id", machineId)
+      if (error) throw error
 
       await fetchMachines()
       alert("Gép státusza frissítve.")
@@ -1051,9 +851,7 @@ async function handleUpdateMachineStatus(machineId: string) {
   }
 
   async function handleReturnMachine(machine: Machine) {
-    const confirmed = window.confirm(
-      `Biztosan leveszed a bérlőt erről a gépről: ${machine.name || "ismeretlen gép"}?`
-    )
+    const confirmed = window.confirm(`Biztosan leveszed a bérlőt erről a gépről: ${machine.name || "ismeretlen gép"}?`)
     if (!confirmed) return
 
     setUpdatingMachineId(machine.id)
@@ -1066,37 +864,19 @@ async function handleUpdateMachineStatus(machineId: string) {
         .eq("status", "Aktív")
         .order("start_date", { ascending: false })
         .limit(1)
-
-      if (activeRentalQuery.error) {
-        throw activeRentalQuery.error
-      }
+      if (activeRentalQuery.error) throw activeRentalQuery.error
 
       const activeRental = activeRentalQuery.data?.[0]
-
       if (activeRental?.id) {
-        const rentalUpdate = await supabase
-          .from("rentals")
-          .update({ status: "Lezárt" })
-          .eq("id", activeRental.id)
-
-        if (rentalUpdate.error) {
-          throw rentalUpdate.error
-        }
+        const rentalUpdate = await supabase.from("rentals").update({ status: "Lezárt" }).eq("id", activeRental.id)
+        if (rentalUpdate.error) throw rentalUpdate.error
       }
 
       const machineUpdate = await supabase
         .from("machines")
-        .update({
-          status: "Szabad",
-          current_customer: null,
-          rental_start: null,
-          rental_end: null,
-        })
+        .update({ status: "Szabad", current_customer: null, rental_start: null, rental_end: null })
         .eq("id", machine.id)
-
-      if (machineUpdate.error) {
-        throw machineUpdate.error
-      }
+      if (machineUpdate.error) throw machineUpdate.error
 
       await Promise.all([fetchMachines(), fetchRequests(), fetchRentals()])
       alert("A gépről sikeresen lekerült a bérlő.")
@@ -1109,9 +889,7 @@ async function handleUpdateMachineStatus(machineId: string) {
   }
 
   async function handleRemoveActiveCustomer(row: ActiveCustomerRow) {
-    const confirmed = window.confirm(
-      `Biztosan eltávolítod ezt a bérlőt a rendszerből: ${row.customer.name || "ismeretlen bérlő"}?`
-    )
+    const confirmed = window.confirm(`Biztosan eltávolítod ezt a bérlőt a rendszerből: ${row.customer.name || "ismeretlen bérlő"}?`)
     if (!confirmed) return
 
     setRemovingCustomerId(row.customer.id)
@@ -1125,46 +903,22 @@ async function handleUpdateMachineStatus(machineId: string) {
         .eq("status", "Aktív")
         .order("start_date", { ascending: false })
         .limit(1)
-
-      if (activeRentalQuery.error) {
-        throw activeRentalQuery.error
-      }
+      if (activeRentalQuery.error) throw activeRentalQuery.error
 
       const activeRental = activeRentalQuery.data?.[0]
-
       if (activeRental?.id) {
-        const rentalUpdate = await supabase
-          .from("rentals")
-          .update({ status: "Lezárt" })
-          .eq("id", activeRental.id)
-
-        if (rentalUpdate.error) {
-          throw rentalUpdate.error
-        }
+        const rentalUpdate = await supabase.from("rentals").update({ status: "Lezárt" }).eq("id", activeRental.id)
+        if (rentalUpdate.error) throw rentalUpdate.error
       }
 
       const machineUpdate = await supabase
         .from("machines")
-        .update({
-          status: "Szabad",
-          current_customer: null,
-          rental_start: null,
-          rental_end: null,
-        })
+        .update({ status: "Szabad", current_customer: null, rental_start: null, rental_end: null })
         .eq("id", row.machine.id)
+      if (machineUpdate.error) throw machineUpdate.error
 
-      if (machineUpdate.error) {
-        throw machineUpdate.error
-      }
-
-      const customerDelete = await supabase
-        .from("customers")
-        .delete()
-        .eq("id", row.customer.id)
-
-      if (customerDelete.error) {
-        throw customerDelete.error
-      }
+      const customerDelete = await supabase.from("customers").delete().eq("id", row.customer.id)
+      if (customerDelete.error) throw customerDelete.error
 
       await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests(), fetchRentals()])
       alert("A bérlő sikeresen eltávolítva.")
@@ -1177,7 +931,6 @@ async function handleUpdateMachineStatus(machineId: string) {
   }
 
   // --- MEMO-ZOTT STATISZTIKÁK ÉS SZŰRÉS ---
-
   const stats = useMemo(() => {
     const total = machines.length
     const rented = machines.filter((m) => isStatus(m, "Kiadva")).length
@@ -1216,88 +969,53 @@ async function handleUpdateMachineStatus(machineId: string) {
 
   const filteredMachines = useMemo(() => {
     if (filter === "összes") return machines
-
     if (filter === "foglalt") {
-      return machines.filter(
-        (m) => isStatus(m, "Kiadva") || isStatus(m, "Lefoglalt")
-      )
+      return machines.filter((m) => isStatus(m, "Kiadva") || isStatus(m, "Lefoglalt"))
     }
-
-    if (filter === "szabad") {
-      return machines.filter((m) => isStatus(m, "Szabad"))
-    }
-
-    if (filter === "tartalék") {
-      return machines.filter((m) => isStatus(m, "Tartalék"))
-    }
-
-    if (filter === "javítás") {
-      return machines.filter((m) => isStatus(m, "Javítás alatt"))
-    }
-
+    if (filter === "szabad") return machines.filter((m) => isStatus(m, "Szabad"))
+    if (filter === "tartalék") return machines.filter((m) => isStatus(m, "Tartalék"))
+    if (filter === "javítás") return machines.filter((m) => isStatus(m, "Javítás alatt"))
     if (filter === "lejáró") {
       return machines.filter((m) => {
         const d = getDaysUntil(m.rental_end)
         return d !== null && d >= 0 && d <= 5 && isStatus(m, "Kiadva")
       })
     }
-
     if (filter === "lejárt") {
       return machines.filter((m) => {
         const d = getDaysUntil(m.rental_end)
         return d !== null && d < 0 && isStatus(m, "Kiadva")
       })
     }
-
     return machines
   }, [machines, filter])
 
-  const rentableMachines = useMemo(
-    () => machines.filter((m) => isMachineImmediatelyAssignable(m)),
-    [machines]
-  )
-
-  const reservableMachines = useMemo(
-    () => machines.filter((m) => isMachineReservableForNext(m)),
-    [machines]
-  )
-
-  const activeRentals = useMemo(
-    () => rentals.filter((r) => (r.status || "").toLowerCase() === "aktív"),
-    [rentals]
-  )
+  const rentableMachines = useMemo(() => machines.filter((m) => isMachineImmediatelyAssignable(m)), [machines])
+  const reservableMachines = useMemo(() => machines.filter((m) => isMachineReservableForNext(m)), [machines])
+  const activeRentals = useMemo(() => rentals.filter((r) => (r.status || "").toLowerCase() === "aktív"), [rentals])
 
   const activeRentalByMachineId = useMemo(() => {
     const map: Record<string, Rental> = {}
-
     for (const rental of activeRentals) {
       if (rental.machine_id && !map[rental.machine_id]) {
         map[rental.machine_id] = rental
       }
     }
-
     return map
   }, [activeRentals])
 
   const reservedRequests = useMemo(
-    () =>
-      requests.filter(
-        (r) =>
-          r.assigned_machine_id &&
-          ["lefoglalva", "párosítva"].includes((r.status || "").toLowerCase())
-      ),
+    () => requests.filter((r) => r.assigned_machine_id && ["lefoglalva", "párosítva"].includes((r.status || "").toLowerCase())),
     [requests]
   )
 
   const nextReservedRequestByMachineId = useMemo(() => {
     const map: Record<string, RequestItem> = {}
-
     for (const request of reservedRequests) {
       if (request.assigned_machine_id && !map[request.assigned_machine_id]) {
         map[request.assigned_machine_id] = request
       }
     }
-
     return map
   }, [reservedRequests])
 
@@ -1312,53 +1030,26 @@ async function handleUpdateMachineStatus(machineId: string) {
 
   const activeCustomerRows = useMemo<ActiveCustomerRow[]>(() => {
     const rows: ActiveCustomerRow[] = []
-
     for (const rental of activeRentals) {
       if (!rental.machine_id || !rental.customer_id) continue
-
       const machine = machines.find((item) => item.id === rental.machine_id)
       const customer = customers.find((item) => item.id === rental.customer_id)
-
-      if (machine && customer) {
-        rows.push({
-          customer,
-          machine,
-          rental,
-        })
-      }
+      if (machine && customer) rows.push({ customer, machine, rental })
     }
-
     return rows
   }, [activeRentals, customers, machines])
 
   const getRowStyle = (m: Machine) => {
     const d = getDaysUntil(m.rental_end)
-
-    if (isStatus(m, "Kiadva") && d !== null && d < 0) {
-      return { backgroundColor: "#ffd6d6" }
-    }
-
-    if (isStatus(m, "Kiadva") && d !== null && d <= 5) {
-      return { backgroundColor: "#fff3cd" }
-    }
-
-    if (isStatus(m, "Szabad")) {
-      return { backgroundColor: "#d9f8e5" }
-    }
-
+    if (isStatus(m, "Kiadva") && d !== null && d < 0) return { backgroundColor: "#ffd6d6" }
+    if (isStatus(m, "Kiadva") && d !== null && d <= 5) return { backgroundColor: "#fff3cd" }
+    if (isStatus(m, "Szabad")) return { backgroundColor: "#d9f8e5" }
     return { backgroundColor: "#ffffff" }
   }
 
   if (loading) {
     return (
-      <main
-        style={{
-          padding: "32px",
-          fontFamily: "sans-serif",
-          background: "#f7f8fa",
-          minHeight: "100vh",
-        }}
-      >
+      <main style={{ padding: "32px", fontFamily: "sans-serif", background: "#f7f8fa", minHeight: "100vh" }}>
         <h2 style={{ marginTop: 0 }}>Betöltés...</h2>
         <p style={{ color: "#555" }}>Adatok szinkronizálása folyamatban.</p>
       </main>
@@ -1366,1006 +1057,45 @@ async function handleUpdateMachineStatus(machineId: string) {
   }
 
   return (
-    <main
-      style={{
-        padding: "32px",
-        fontFamily: "sans-serif",
-        background: "#f7f8fa",
-        minHeight: "100vh",
-      }}
-    <header
-  style={{
-    marginBottom: "24px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "16px",
-    flexWrap: "wrap",
-  }}
->
-  <div>
-    <h1 style={{ fontSize: "32px", margin: 0 }}>CPM Rent Admin</h1>
-    <p style={{ color: "#555" }}>Flottakezelő dashboard</p>
-  </div>
-
-  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-    <a
-      href="/mobile"
-      style={{
-        padding: "10px 20px",
-        background: "#2563eb",
-        color: "#fff",
-        borderRadius: "8px",
-        textDecoration: "none",
-        fontWeight: "bold",
-      }}
-    >
-      Mobil nézet
-    </a>
-
-    <button onClick={logout} style={primaryButtonStyle}>
-      Kijelentkezés
-    </button>
-  </div>
-</header>
-
-      <section style={cardStyle}>
-        <button
-          onClick={() => setShowAddMachineForm(!showAddMachineForm)}
-          style={toggleButtonStyle}
-        >
-          {showAddMachineForm ? "▼ Bezárás" : "▶ Új gép hozzáadása"}
-        </button>
-
-        {showAddMachineForm && (
-          <form onSubmit={handleAddMachine} style={{ marginTop: "18px" }}>
-            <div style={formGridStyle}>
-              <input
-                placeholder="Gép neve"
-                value={machineForm.name}
-                onChange={(e) =>
-                  setMachineForm({ ...machineForm, name: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                placeholder="Típus"
-                value={machineForm.type}
-                onChange={(e) =>
-                  setMachineForm({ ...machineForm, type: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <select
-                value={machineForm.status}
-                onChange={(e) =>
-                  setMachineForm({ ...machineForm, status: e.target.value })
-                }
-                style={inputStyle}
-              >
-                <option value="Szabad">Szabad</option>
-                <option value="Kiadva">Kiadva</option>
-                <option value="Lefoglalt">Lefoglalt</option>
-                <option value="Javítás alatt">Javítás alatt</option>
-                <option value="Tartalék">Tartalék</option>
-              </select>
-
-              <input
-                placeholder="Lokáció"
-                value={machineForm.location}
-                onChange={(e) =>
-                  setMachineForm({ ...machineForm, location: e.target.value })
-                }
-                style={inputStyle}
-              />
-            </div>
-
-            <button type="submit" disabled={savingMachine} style={primaryButtonStyle}>
-              {savingMachine ? "Mentés..." : "Gép mentése"}
-            </button>
-
-            {machineMessage && <span style={msgStyle}>{machineMessage}</span>}
-          </form>
-        )}
-      </section>
-
-      <section style={cardStyle}>
-        <button
-          onClick={() => setShowAddRentalForm(!showAddRentalForm)}
-          style={toggleButtonStyle}
-        >
-          {showAddRentalForm ? "▼ Bezárás" : "▶ Új bérlés rögzítése"}
-        </button>
-
-        {showAddRentalForm && (
-          <form onSubmit={handleAddRental} style={{ marginTop: "18px" }}>
-            <div style={formGridStyle}>
-              <select
-                value={rentalForm.machine_id}
-                onChange={(e) =>
-                  setRentalForm({ ...rentalForm, machine_id: e.target.value })
-                }
-                style={inputStyle}
-              >
-                <option value="">Válassz gépet...</option>
-                {rentableMachines.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name} ({m.status})
-                  </option>
-                ))}
-              </select>
-
-              <div style={{ display: "flex", gap: "8px" }}>
-                <select
-                  value={rentalForm.customer_id}
-                  onChange={(e) =>
-                    setRentalForm({ ...rentalForm, customer_id: e.target.value })
-                  }
-                  style={inputStyle}
-                >
-                  <option value="">Válassz bérlőt...</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.city || "nincs város"})
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => setShowNewCustomerForm(!showNewCustomerForm)}
-                  style={secondaryButtonStyle}
-                >
-                  +
-                </button>
-              </div>
-
-              {showNewCustomerForm && (
-                <div style={innerFormStyle}>
-                  <h4 style={{ marginTop: 0 }}>Új bérlő gyors felvitele</h4>
-
-                  <div style={formGridStyle}>
-                    <input
-                      placeholder="Név"
-                      value={customerForm.name}
-                      onChange={(e) =>
-                        setCustomerForm({ ...customerForm, name: e.target.value })
-                      }
-                      style={inputStyle}
-                    />
-
-                    <input
-                      placeholder="Város"
-                      value={customerForm.city}
-                      onChange={(e) =>
-                        setCustomerForm({ ...customerForm, city: e.target.value })
-                      }
-                      style={inputStyle}
-                    />
-
-                    <input
-                      placeholder="Telefon"
-                      value={customerForm.phone}
-                      onChange={(e) =>
-                        setCustomerForm({ ...customerForm, phone: e.target.value })
-                      }
-                      style={inputStyle}
-                    />
-
-                    <input
-                      placeholder="Email"
-                      value={customerForm.email}
-                      onChange={(e) =>
-                        setCustomerForm({ ...customerForm, email: e.target.value })
-                      }
-                      style={inputStyle}
-                    />
-
-                    <input
-                      placeholder="Cím"
-                      value={customerForm.address}
-                      onChange={(e) =>
-                        setCustomerForm({ ...customerForm, address: e.target.value })
-                      }
-                      style={inputStyle}
-                    />
-
-                    <input
-                      placeholder="Megjegyzés"
-                      value={customerForm.notes}
-                      onChange={(e) =>
-                        setCustomerForm({ ...customerForm, notes: e.target.value })
-                      }
-                      style={inputStyle}
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleAddCustomer}
-                    disabled={savingCustomer}
-                    style={primaryButtonStyle}
-                  >
-                    {savingCustomer ? "Mentés..." : "Bérlő mentése"}
-                  </button>
-
-                  {customerMessage && <div style={{ marginTop: 10 }}>{customerMessage}</div>}
-                </div>
-              )}
-
-              <input
-                type="date"
-                value={rentalForm.start_date}
-                onChange={(e) =>
-                  setRentalForm({ ...rentalForm, start_date: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                type="date"
-                value={rentalForm.end_date}
-                onChange={(e) =>
-                  setRentalForm({ ...rentalForm, end_date: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                type="number"
-                placeholder="Bérleti díj"
-                value={rentalForm.berleti_dij}
-                onChange={(e) =>
-                  setRentalForm({ ...rentalForm, berleti_dij: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                type="number"
-                placeholder="Fizetett összeg"
-                value={rentalForm.fizetett_osszeg}
-                onChange={(e) =>
-                  setRentalForm({ ...rentalForm, fizetett_osszeg: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <select
-                value={rentalForm.visszaszallitas_modja}
-                onChange={(e) =>
-                  setRentalForm({
-                    ...rentalForm,
-                    visszaszallitas_modja: e.target.value,
-                  })
-                }
-                style={inputStyle}
-              >
-                <option value="Én megyek érte">Én megyek érte</option>
-                <option value="Visszahozza">Visszahozza</option>
-                <option value="Futár">Futár</option>
-              </select>
-
-              <input
-                placeholder="Megjegyzés"
-                value={rentalForm.notes}
-                onChange={(e) =>
-                  setRentalForm({ ...rentalForm, notes: e.target.value })
-                }
-                style={inputStyle}
-              />
-            </div>
-
-            <button type="submit" disabled={savingRental} style={primaryButtonStyle}>
-              {savingRental ? "Mentés..." : "Bérlés indítása"}
-            </button>
-
-            {rentalMessage && <span style={msgStyle}>{rentalMessage}</span>}
-          </form>
-        )}
-      </section>
-
-      <div style={statsGridStyle}>
-        <StatCard title="Összes gép" value={stats.total} />
-        <StatCard title="Szabad" value={stats.free} color="#16a34a" />
-        <StatCard title="Kiadva" value={stats.rented} color="#2563eb" />
-        <StatCard title="Lefoglalt" value={stats.reserved} color="#7c3aed" />
-        <StatCard
-          title="Lejáró / Lejárt"
-          value={`${stats.expiringSoon} / ${stats.expired}`}
-          color="#dc2626"
-        />
-        <StatCard title="Kihasználtság" value={`${stats.utilization}%`} />
-      </div>
-
-      <section style={{ ...cardStyle, padding: "14px 20px" }}>
-        <strong>Kapacitás állapot:</strong> {stats.recommendation}
-      </section>
-
-      <section style={cardStyle}>
-        <button
-          onClick={() => setShowAddRequestForm(!showAddRequestForm)}
-          style={toggleButtonStyle}
-        >
-          {showAddRequestForm ? "▼ Bezárás" : "▶ Új várakozó hozzáadása"}
-        </button>
-
-        {showAddRequestForm && (
-          <form onSubmit={handleAddRequest} style={{ marginTop: "18px" }}>
-            <div style={formGridStyle}>
-              <input
-                placeholder="Név"
-                value={requestForm.name}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, name: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                placeholder="Telefon"
-                value={requestForm.phone}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, phone: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                placeholder="Email"
-                value={requestForm.email}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, email: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                placeholder="Város"
-                value={requestForm.city}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, city: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                placeholder="Cím"
-                value={requestForm.address}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, address: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                type="date"
-                value={requestForm.requested_start_date}
-                onChange={(e) =>
-                  setRequestForm({
-                    ...requestForm,
-                    requested_start_date: e.target.value,
-                  })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                type="number"
-                placeholder="Napok száma"
-                value={requestForm.requested_duration_days}
-                onChange={(e) =>
-                  setRequestForm({
-                    ...requestForm,
-                    requested_duration_days: e.target.value,
-                  })
-                }
-                style={inputStyle}
-              />
-
-              <select
-                value={requestForm.status}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, status: e.target.value })
-                }
-                style={inputStyle}
-              >
-                <option value="várakozik">várakozik</option>
-                <option value="párosítva">párosítva</option>
-                <option value="lefoglalva">lefoglalva</option>
-                <option value="aktív">aktív</option>
-                <option value="visszamondta">visszamondta</option>
-              </select>
-
-              <input
-                type="number"
-                placeholder="Prioritás"
-                value={requestForm.priority}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, priority: e.target.value })
-                }
-                style={inputStyle}
-              />
-
-              <input
-                placeholder="Megjegyzés"
-                value={requestForm.notes}
-                onChange={(e) =>
-                  setRequestForm({ ...requestForm, notes: e.target.value })
-                }
-                style={inputStyle}
-              />
-            </div>
-
-            <button type="submit" disabled={savingRequest} style={primaryButtonStyle}>
-              {savingRequest ? "Mentés..." : "Várakozó mentése"}
-            </button>
-
-            {requestMessage && <span style={msgStyle}>{requestMessage}</span>}
-          </form>
-        )}
-
-        <h2 style={{ marginTop: "20px", marginBottom: "16px" }}>Várólista</h2>
-
-        {requests.length === 0 ? (
-          <p style={{ color: "#666", margin: 0 }}>Nincs várakozó a listán.</p>
-        ) : (
-          <div
-            style={{
-              overflowX: "auto",
-              background: "#fff",
-              borderRadius: "12px",
-            }}
-          >
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#111", color: "#fff" }}>
-                  <th style={cellStyle}>Név</th>
-                  <th style={cellStyle}>Telefon</th>
-                  <th style={cellStyle}>Email</th>
-                  <th style={cellStyle}>Város</th>
-                  <th style={cellStyle}>Kezdés</th>
-                  <th style={cellStyle}>Nap</th>
-                  <th style={cellStyle}>Státusz</th>
-                  <th style={cellStyle}>Prioritás</th>
-                  <th style={cellStyle}>Megjegyzés</th>
-                  <th style={cellStyle}>Gép</th>
-                  <th style={cellStyle}>Művelet</th>
-                </tr>
-              </thead>
-              <tbody>
-                {requests.map((r) => (
-                  <tr key={r.id}>
-                    <td style={cellStyle}>
-                      <strong>{r.name || "-"}</strong>
-                    </td>
-                    <td style={cellStyle}>{r.phone || "-"}</td>
-                    <td style={cellStyle}>{r.email || "-"}</td>
-                    <td style={cellStyle}>{r.city || "-"}</td>
-                    <td style={cellStyle}>{r.requested_start_date || "-"}</td>
-                    <td style={cellStyle}>{r.requested_duration_days ?? "-"}</td>
-                    <td style={cellStyle}>{r.status || "-"}</td>
-                    <td style={cellStyle}>{r.priority ?? "-"}</td>
-                    <td style={cellStyle}>{r.notes || "-"}</td>
-
-                    <td style={cellStyle}>
-                      {r.status === "aktív" ? (
-                        "-"
-                      ) : (
-                        <select
-                          value={requestMachineSelections[r.id] || ""}
-                          onChange={(e) =>
-                            setRequestMachineSelections((prev) => ({
-                              ...prev,
-                              [r.id]: e.target.value,
-                            }))
-                          }
-                          style={inputStyle}
-                        >
-                          <option value="">Válassz gépet...</option>
-                          {reservableMachines.map((m) => {
-                            const days = getDaysUntil(m.rental_end)
-                            const isSoonIssued =
-                              (m.status || "").toLowerCase() === "kiadva" &&
-                              days !== null &&
-                              days >= 0 &&
-                              days <= 4
-
-                            return (
-                              <option key={m.id} value={m.id}>
-                                {m.name} ({m.status}
-                                {isSoonIssued ? `, ${days === 0 ? "ma" : `${days} nap`} múlva szabadul` : ""})
-                              </option>
-                            )
-                          })}
-                        </select>
-                      )}
-                    </td>
-
-                    <td style={cellStyle}>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        {r.status !== "aktív" && r.status !== "visszamondta" && (
-                          <button
-                            type="button"
-                            onClick={() => handleAssignRequestToMachine(r)}
-                            disabled={assigningRequestId === r.id}
-                            style={{
-                              padding: "8px 10px",
-                              borderRadius: "8px",
-                              border: "1px solid #ddd",
-                              background: "#d9f8e5",
-                              cursor: "pointer",
-                              fontWeight: "bold",
-                            }}
-                          >
-                            {assigningRequestId === r.id ? "Folyamatban..." : "Gépre ad"}
-                          </button>
-                        )}
-
-                        {r.status !== "aktív" && r.status !== "visszamondta" && (
-                          <button
-                            type="button"
-                            onClick={() => handleReserveRequestToMachine(r)}
-                            disabled={reservingRequestId === r.id}
-                            style={{
-                              padding: "8px 10px",
-                              borderRadius: "8px",
-                              border: "1px solid #ddd",
-                              background: "#eef2ff",
-                              cursor: "pointer",
-                              fontWeight: "bold",
-                            }}
-                          >
-                            {reservingRequestId === r.id
-                              ? "Folyamatban..."
-                              : "Következőnek lefoglal"}
-                          </button>
-                        )}
-
-                        {r.status !== "visszamondta" && r.status !== "aktív" && (
-                          <button
-                            type="button"
-                            onClick={() => handleMarkRequestCancelled(r.id)}
-                            style={{
-                              padding: "8px 10px",
-                              borderRadius: "8px",
-                              border: "1px solid #ddd",
-                              background: "#fff3cd",
-                              cursor: "pointer",
-                              fontWeight: "bold",
-                            }}
-                          >
-                            Visszamondta
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteRequest(r.id)}
-                          style={{
-                            padding: "8px 10px",
-                            borderRadius: "8px",
-                            border: "1px solid #ddd",
-                            background: "#ffd6d6",
-                            cursor: "pointer",
-                            fontWeight: "bold",
-                          }}
-                        >
-                          Törlés
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section style={cardStyle}>
-        <h2 style={{ marginTop: 0, marginBottom: "16px" }}>4 napon belül felszabaduló kiadott gépek</h2>
-
-        {soonExpiringIssuedMachines.length === 0 ? (
-          <p style={{ color: "#666", margin: 0 }}>Nincs 4 napon belül lejáró kiadott gép.</p>
-        ) : (
-          <div
-            style={{
-              overflowX: "auto",
-              background: "#fff",
-              borderRadius: "12px",
-            }}
-          >
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#111", color: "#fff" }}>
-                  <th style={cellStyle}>Gép</th>
-                  <th style={cellStyle}>Aktuális bérlő</th>
-                  <th style={cellStyle}>Lejárat</th>
-                  <th style={cellStyle}>Nap múlva</th>
-                  <th style={cellStyle}>Következő ügyfél</th>
-                </tr>
-              </thead>
-              <tbody>
-                {soonExpiringIssuedMachines.map((machine) => {
-                  const nextRequest = nextReservedRequestByMachineId[machine.id]
-                  const days = getDaysUntil(machine.rental_end)
-
-                  return (
-                    <tr key={machine.id}>
-                      <td style={cellStyle}>
-                        <strong>{machine.name || "-"}</strong>
-                      </td>
-                      <td style={cellStyle}>{machine.current_customer || "-"}</td>
-                      <td style={cellStyle}>{machine.rental_end || "-"}</td>
-                      <td style={cellStyle}>
-                        {days === null ? "-" : days === 0 ? "Ma" : `${days} nap`}
-                      </td>
-                      <td style={cellStyle}>
-                        {nextRequest ? (
-                          <>
-                            <strong>{nextRequest.name || "-"}</strong>
-                            <br />
-                            <small>{nextRequest.status || "-"}</small>
-                          </>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section style={cardStyle}>
-        <h2 style={{ marginTop: 0, marginBottom: "16px" }}>Aktív bérlők listája</h2>
-
-        {activeCustomerRows.length === 0 ? (
-          <p style={{ color: "#666", margin: 0 }}>Nincs aktív bérlő.</p>
-        ) : (
-          <div
-            style={{
-              overflowX: "auto",
-              background: "#fff",
-              borderRadius: "12px",
-            }}
-          >
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "#111", color: "#fff" }}>
-                  <th style={cellStyle}>Név</th>
-                  <th style={cellStyle}>Telefon</th>
-                  <th style={cellStyle}>Email</th>
-                  <th style={cellStyle}>Város</th>
-                  <th style={cellStyle}>Cím</th>
-                  <th style={cellStyle}>Gép</th>
-                  <th style={cellStyle}>Lejárat</th>
-                  <th style={cellStyle}>Visszaszállítás</th>
-                  <th style={cellStyle}>Tartozás</th>
-                  <th style={cellStyle}>Művelet</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeCustomerRows.map((row) => (
-                  <tr key={`${row.customer.id}-${row.machine.id}`}>
-                    <td style={cellStyle}>
-                      <strong>{row.customer.name || "-"}</strong>
-                    </td>
-                    <td style={cellStyle}>{row.customer.phone || "-"}</td>
-                    <td style={cellStyle}>{row.customer.email || "-"}</td>
-                    <td style={cellStyle}>{row.customer.city || "-"}</td>
-                    <td style={cellStyle}>{row.customer.address || "-"}</td>
-                    <td style={cellStyle}>{row.machine.name || "-"}</td>
-                    <td style={cellStyle}>{row.machine.rental_end || "-"}</td>
-                    <td style={cellStyle}>
-                      {row.rental?.visszaszallitas_modja || "-"}
-                    </td>
-                    <td
-                      style={{
-                        ...cellStyle,
-                        color: (row.rental?.tartozas || 0) > 0 ? "#dc2626" : "#111",
-                        fontWeight: "bold",
-                      }}
-                    >
-                      {row.rental?.tartozas ? `${row.rental.tartozas.toLocaleString("hu-HU")} Ft` : "0 Ft"}
-                    </td>
-                    <td style={cellStyle}>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveActiveCustomer(row)}
-                        disabled={removingCustomerId === row.customer.id}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: "8px",
-                          border: "1px solid #ddd",
-                          background: "#ffd6d6",
-                          cursor: "pointer",
-                          fontWeight: "bold",
-                        }}
-                      >
-                        {removingCustomerId === row.customer.id
-                          ? "Folyamatban..."
-                          : "Bérlő eltávolítása"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <div
+    <main style={{ padding: "32px", fontFamily: "sans-serif", background: "#f7f8fa", minHeight: "100vh" }}>
+      <header
         style={{
+          marginBottom: "24px",
           display: "flex",
-          gap: "8px",
-          marginBottom: "16px",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: "16px",
           flexWrap: "wrap",
         }}
       >
-        {(
-          ["összes", "foglalt", "szabad", "lejáró", "lejárt", "tartalék", "javítás"] as FilterType[]
-        ).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
+        <div>
+          <h1 style={{ fontSize: "32px", margin: 0 }}>CPM Rent Admin</h1>
+          <p style={{ color: "#555" }}>Flottakezelő dashboard</p>
+        </div>
+
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          <Link
+            href="/mobile"
             style={{
-              ...filterButtonStyle,
-              background: filter === f ? "#111" : "#fff",
-              color: filter === f ? "#fff" : "#111",
+              padding: "10px 20px",
+              background: "#2563eb",
+              color: "#fff",
+              borderRadius: "8px",
+              textDecoration: "none",
+              fontWeight: "bold",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
-            {f}
+            Mobil nézet
+          </Link>
+
+          <button onClick={logout} style={primaryButtonStyle}>
+            Kijelentkezés
           </button>
-        ))}
-      </div>
-
-      <div
-        style={{
-          overflowX: "auto",
-          background: "#fff",
-          borderRadius: "12px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
-        }}
-      >
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ background: "#111", color: "#fff" }}>
-              <th style={cellStyle}>Név</th>
-              <th style={cellStyle}>Státusz</th>
-              <th style={cellStyle}>Bérlő / Lokáció</th>
-              <th style={cellStyle}>Lejárat</th>
-              <th style={cellStyle}>Visszaszállítás</th>
-              <th style={cellStyle}>Tartozás</th>
-              <th style={cellStyle}>Új visszaszállítás</th>
-              <th style={cellStyle}>Új tartozás</th>
-              <th style={cellStyle}>Új lejárat</th>
-              <th style={cellStyle}>Új státusz</th>
-              <th style={cellStyle}>Művelet</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredMachines.map((m) => (
-              <tr key={m.id} style={getRowStyle(m)}>
-                <td style={cellStyle}>
-                  <strong>{m.name}</strong>
-                  <br />
-                  <small>{m.type}</small>
-                </td>
-
-                <td style={cellStyle}>{m.status}</td>
-
-                <td style={cellStyle}>
-                  {m.current_customer || "-"}
-                  <br />
-                  <small>{m.location || "-"}</small>
-                </td>
-
-                <td style={cellStyle}>
-                  {m.rental_end || "-"}
-                  {m.rental_end && (
-                    <>
-                      <br />
-                      <small style={{ color: "#666" }}>
-                        {(() => {
-                          const days = getDaysUntil(m.rental_end)
-                          if (days === null) return ""
-                          if (days < 0) return `${Math.abs(days)} napja lejárt`
-                          if (days === 0) return "Ma jár le"
-                          return `${days} nap múlva`
-                        })()}
-                      </small>
-                    </>
-                  )}
-                </td>
-
-                <td style={cellStyle}>
-                  {activeRentalByMachineId[m.id]?.visszaszallitas_modja || "-"}
-                </td>
-
-                <td
-                  style={{
-                    ...cellStyle,
-                    color: (activeRentalByMachineId[m.id]?.tartozas || 0) > 0 ? "#dc2626" : "#111",
-                    fontWeight: activeRentalByMachineId[m.id]?.tartozas ? "bold" : "normal",
-                  }}
-                >
-                  {activeRentalByMachineId[m.id]?.tartozas
-                    ? `${activeRentalByMachineId[m.id]!.tartozas!.toLocaleString("hu-HU")} Ft`
-                    : "0 Ft"}
-                </td>
-
-                <td style={cellStyle}>
-                  {activeRentalByMachineId[m.id] ? (
-                    <select
-                      value={
-                        rentalReturnModeSelections[m.id] ??
-                        activeRentalByMachineId[m.id]?.visszaszallitas_modja ??
-                        "Én megyek érte"
-                      }
-                      onChange={(e) =>
-                        setRentalReturnModeSelections((prev) => ({
-                          ...prev,
-                          [m.id]: e.target.value,
-                        }))
-                      }
-                      style={inputStyle}
-                    >
-                      <option value="Én megyek érte">Én megyek érte</option>
-                      <option value="Visszahozza">Visszahozza</option>
-                      <option value="Futár">Futár</option>
-                    </select>
-                  ) : (
-                    "-"
-                  )}
-                </td>
-
-                <td style={cellStyle}>
-                  {activeRentalByMachineId[m.id] ? (
-                    <input
-                      type="number"
-                      min="0"
-                      step="1000"
-                      value={
-                        rentalDebtSelections[m.id] ??
-                        String(activeRentalByMachineId[m.id]?.tartozas ?? 0)
-                      }
-                      onChange={(e) =>
-                        setRentalDebtSelections((prev) => ({
-                          ...prev,
-                          [m.id]: e.target.value,
-                        }))
-                      }
-                      style={inputStyle}
-                    />
-                  ) : (
-                    "-"
-                  )}
-                </td>
-
-                <td style={cellStyle}>
-                  {m.current_customer ? (
-                    <input
-                      type="date"
-                      value={rentalEndSelections[m.id] ?? m.rental_end ?? ""}
-                      onChange={(e) =>
-                        setRentalEndSelections((prev) => ({
-                          ...prev,
-                          [m.id]: e.target.value,
-                        }))
-                      }
-                      style={inputStyle}
-                    />
-                  ) : (
-                    "-"
-                  )}
-                </td>
-
-                <td style={cellStyle}>
-                  <select
-                    value={machineStatusSelections[m.id] || ""}
-                    onChange={(e) =>
-                      setMachineStatusSelections((prev) => ({
-                        ...prev,
-                        [m.id]: e.target.value,
-                      }))
-                    }
-                    style={inputStyle}
-                  >
-                    <option value="">Válassz...</option>
-                    <option value="Szabad">Szabad</option>
-                    <option value="Kiadva">Kiadva</option>
-                    <option value="Lefoglalt">Lefoglalt</option>
-                    <option value="Javítás alatt">Javítás alatt</option>
-                    <option value="Tartalék">Tartalék</option>
-                  </select>
-                </td>
-
-                <td style={cellStyle}>
-                  <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateMachineStatus(m.id)}
-                      disabled={updatingMachineId === m.id}
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: "8px",
-                        border: "1px solid #ddd",
-                        background: "#eef2ff",
-                        cursor: "pointer",
-                        fontWeight: "bold",
-                      }}
-                    >
-                      {updatingMachineId === m.id ? "Mentés..." : "Státusz mentése"}
-                    </button>
-
-                    {m.current_customer && (
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateRentalEnd(m)}
-                        disabled={updatingRentalId === m.id}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: "8px",
-                          border: "1px solid #ddd",
-                          background: "#fff3cd",
-                          cursor: "pointer",
-                          fontWeight: "bold",
-                        }}
-                      >
-                        {updatingRentalId === m.id ? "Mentés..." : "Lejárat módosítása"}
-                      </button>
-                    )}
-
-                    {activeRentalByMachineId[m.id] && (
-                      <button
-                        type="button"
-                        onClick={() => handleSaveRentalDetails(m)}
-                        disabled={savingRentalDetailsId === m.id}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: "8px",
-                          border: "1px solid #ddd",
-                          background: "#d9f8e5",
-                          cursor: "pointer",
-                          fontWeight: "bold",
-                        }}
-                      >
-                        {savingRentalDetailsId === m.id ? "Mentés..." : "Bérlés adatok mentése"}
-                      </button>
-                    )}
-
-                    {m.current_customer && (
-                      <button
-                        type="button"
-                        onClick={() => handleReturnMachine(m)}
-                        disabled={updatingMachineId === m.id}
-                        style={{
-                          padding: "8px 10px",
-                          borderRadius: "8px",
-                          border: "1px solid #ddd",
-                          background: "#ffd6d6",
-                          cursor: "pointer",
-                          fontWeight: "bold",
-                        }}
-                      >
-                        Bérlő levétele
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+        </div>
+      </header>
     </main>
   )
 }
