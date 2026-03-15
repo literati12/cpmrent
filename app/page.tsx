@@ -43,9 +43,25 @@ type RequestItem = {
   created_at?: string | null
 }
 
+type Rental = {
+  id: string
+  machine_id: string | null
+  customer_id: string | null
+  start_date: string | null
+  end_date: string | null
+  status: string | null
+  created_at?: string | null
+  berleti_dij: number | null
+  fizetett_osszeg: number | null
+  tartozas: number | null
+  note: string | null
+  visszaszallitas_modja: string | null
+}
+
 type ActiveCustomerRow = {
   customer: Customer
   machine: Machine
+  rental: Rental | null
 }
 
 type FilterType =
@@ -164,6 +180,7 @@ export default function Dashboard() {
   const [machines, setMachines] = useState<Machine[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [requests, setRequests] = useState<RequestItem[]>([])
+  const [rentals, setRentals] = useState<Rental[]>([])
   const [loading, setLoading] = useState(true)
 
   const [savingMachine, setSavingMachine] = useState(false)
@@ -218,7 +235,7 @@ export default function Dashboard() {
 
   async function loadAllData() {
     setLoading(true)
-    await Promise.all([fetchMachines(), fetchCustomers(), fetchRequests()])
+    await Promise.all([fetchMachines(), fetchCustomers(), fetchRequests(), fetchRentals()])
     setLoading(false)
   }
 
@@ -276,6 +293,25 @@ export default function Dashboard() {
       })
     } else {
       setRequests(data || [])
+    }
+  }
+
+  async function fetchRentals() {
+    const { data, error } = await supabase
+      .from("rentals")
+      .select("*")
+      .order("start_date", { ascending: false })
+
+    if (error) {
+      console.error("Hiba a bérlések lekérésekor:", {
+        raw: error,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      })
+    } else {
+      setRentals(data || [])
     }
   }
 
@@ -411,7 +447,7 @@ export default function Dashboard() {
       setMachineMessage("Sikeres mentés.")
       setMachineForm(initialMachineForm)
       setShowAddMachineForm(false)
-      await fetchMachines()
+      await Promise.all([fetchMachines(), fetchRentals()])
     } catch (error: any) {
       console.error("Váratlan hiba gép mentés közben:", error)
       setMachineMessage(
@@ -535,7 +571,7 @@ export default function Dashboard() {
       setRentalMessage("Bérlés rögzítve.")
       setRentalForm(initialRentalForm)
       setShowAddRentalForm(false)
-      await fetchMachines()
+      await Promise.all([fetchMachines(), fetchRentals()])
     } catch (error: any) {
       console.error("Váratlan hiba bérlés rögzítés közben:", error)
       setRentalMessage(
@@ -747,7 +783,7 @@ export default function Dashboard() {
         throw requestUpdate.error
       }
 
-      await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests()])
+      await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests(), fetchRentals()])
       alert("A várakozóból sikeresen aktív bérlő lett.")
     } catch (error: any) {
       console.error("Hiba gépre adás közben:", error)
@@ -924,7 +960,7 @@ export default function Dashboard() {
         throw machineUpdate.error
       }
 
-      await Promise.all([fetchMachines(), fetchRequests()])
+      await Promise.all([fetchMachines(), fetchRequests(), fetchRentals()])
       alert("A gépről sikeresen lekerült a bérlő.")
     } catch (error: any) {
       console.error("Hiba visszavétel közben:", error)
@@ -992,7 +1028,7 @@ export default function Dashboard() {
         throw customerDelete.error
       }
 
-      await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests()])
+      await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests(), fetchRentals()])
       alert("A bérlő sikeresen eltávolítva.")
     } catch (error: any) {
       console.error("Hiba bérlő eltávolítása közben:", error)
@@ -1088,30 +1124,43 @@ export default function Dashboard() {
     [machines]
   )
 
+  const activeRentals = useMemo(
+    () => rentals.filter((r) => (r.status || "").toLowerCase() === "aktív"),
+    [rentals]
+  )
+
+  const activeRentalByMachineId = useMemo(() => {
+    const map: Record<string, Rental> = {}
+
+    for (const rental of activeRentals) {
+      if (rental.machine_id && !map[rental.machine_id]) {
+        map[rental.machine_id] = rental
+      }
+    }
+
+    return map
+  }, [activeRentals])
+
   const activeCustomerRows = useMemo<ActiveCustomerRow[]>(() => {
     const rows: ActiveCustomerRow[] = []
 
-    for (const machine of machines) {
-      if (!machine.current_customer) continue
+    for (const rental of activeRentals) {
+      if (!rental.machine_id || !rental.customer_id) continue
 
-      const matchedCustomer = customers.find((customer) => {
-        if (!customer.name) return false
-        return (
-          customer.name.trim().toLowerCase() ===
-          machine.current_customer!.trim().toLowerCase()
-        )
-      })
+      const machine = machines.find((item) => item.id === rental.machine_id)
+      const customer = customers.find((item) => item.id === rental.customer_id)
 
-      if (matchedCustomer) {
+      if (machine && customer) {
         rows.push({
-          customer: matchedCustomer,
+          customer,
           machine,
+          rental,
         })
       }
     }
 
     return rows
-  }, [customers, machines])
+  }, [activeRentals, customers, machines])
 
   const getRowStyle = (m: Machine) => {
     const d = getDaysUntil(m.rental_end)
@@ -1724,6 +1773,8 @@ export default function Dashboard() {
                   <th style={cellStyle}>Cím</th>
                   <th style={cellStyle}>Gép</th>
                   <th style={cellStyle}>Lejárat</th>
+                  <th style={cellStyle}>Visszaszállítás</th>
+                  <th style={cellStyle}>Tartozás</th>
                   <th style={cellStyle}>Művelet</th>
                 </tr>
               </thead>
@@ -1739,6 +1790,18 @@ export default function Dashboard() {
                     <td style={cellStyle}>{row.customer.address || "-"}</td>
                     <td style={cellStyle}>{row.machine.name || "-"}</td>
                     <td style={cellStyle}>{row.machine.rental_end || "-"}</td>
+                    <td style={cellStyle}>
+                      {row.rental?.visszaszallitas_modja || "-"}
+                    </td>
+                    <td
+                      style={{
+                        ...cellStyle,
+                        color: (row.rental?.tartozas || 0) > 0 ? "#dc2626" : "#111",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {row.rental?.tartozas ? `${row.rental.tartozas.toLocaleString("hu-HU")} Ft` : "0 Ft"}
+                    </td>
                     <td style={cellStyle}>
                       <button
                         type="button"
@@ -1806,6 +1869,8 @@ export default function Dashboard() {
               <th style={cellStyle}>Státusz</th>
               <th style={cellStyle}>Bérlő / Lokáció</th>
               <th style={cellStyle}>Lejárat</th>
+              <th style={cellStyle}>Visszaszállítás</th>
+              <th style={cellStyle}>Tartozás</th>
               <th style={cellStyle}>Új lejárat</th>
               <th style={cellStyle}>Új státusz</th>
               <th style={cellStyle}>Művelet</th>
@@ -1844,6 +1909,22 @@ export default function Dashboard() {
                       </small>
                     </>
                   )}
+                </td>
+
+                <td style={cellStyle}>
+                  {activeRentalByMachineId[m.id]?.visszaszallitas_modja || "-"}
+                </td>
+
+                <td
+                  style={{
+                    ...cellStyle,
+                    color: (activeRentalByMachineId[m.id]?.tartozas || 0) > 0 ? "#dc2626" : "#111",
+                    fontWeight: activeRentalByMachineId[m.id]?.tartozas ? "bold" : "normal",
+                  }}
+                >
+                  {activeRentalByMachineId[m.id]?.tartozas
+                    ? `${activeRentalByMachineId[m.id]!.tartozas!.toLocaleString("hu-HU")} Ft`
+                    : "0 Ft"}
                 </td>
 
                 <td style={cellStyle}>
