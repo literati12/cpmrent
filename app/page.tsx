@@ -1373,8 +1373,7 @@ async function handleUpdateMachineStatus(machineId: string) {
         background: "#f7f8fa",
         minHeight: "100vh",
       }}
-    >
-     <header
+    <header
   style={{
     marginBottom: "24px",
     display: "flex",
@@ -1390,7 +1389,7 @@ async function handleUpdateMachineStatus(machineId: string) {
   </div>
 
   <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-    <Link
+    <a
       href="/mobile"
       style={{
         padding: "10px 20px",
@@ -1399,13 +1398,10 @@ async function handleUpdateMachineStatus(machineId: string) {
         borderRadius: "8px",
         textDecoration: "none",
         fontWeight: "bold",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
       }}
     >
       Mobil nézet
-    </Link>
+    </a>
 
     <button onClick={logout} style={primaryButtonStyle}>
       Kijelentkezés
