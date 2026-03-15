@@ -193,6 +193,8 @@ export default function Dashboard() {
 
   const [requestMachineSelections, setRequestMachineSelections] = useState<Record<string, string>>({})
   const [machineStatusSelections, setMachineStatusSelections] = useState<Record<string, string>>({})
+  const [rentalEndSelections, setRentalEndSelections] = useState<Record<string, string>>({})
+  const [updatingRentalId, setUpdatingRentalId] = useState<string | null>(null)
 
   useEffect(() => {
     checkUser()
@@ -752,6 +754,80 @@ export default function Dashboard() {
       alert(getSupabaseErrorMessage(error, "Nem sikerült a várakozót gépre adni."))
     } finally {
       setAssigningRequestId(null)
+    }
+  }
+
+  async function handleUpdateRentalEnd(machine: Machine) {
+    const newEndDate = rentalEndSelections[machine.id] || machine.rental_end
+
+    if (!newEndDate) {
+      alert("Adj meg új lejárati dátumot.")
+      return
+    }
+
+    if (!machine.current_customer) {
+      alert("Ehhez a géphez nincs aktív bérlő.")
+      return
+    }
+
+    if (machine.rental_start && newEndDate < machine.rental_start) {
+      alert("Az új lejárat nem lehet korábbi, mint a kezdő dátum.")
+      return
+    }
+
+    setUpdatingRentalId(machine.id)
+
+    try {
+      const activeRentalQuery = await supabase
+        .from("rentals")
+        .select("id")
+        .eq("machine_id", machine.id)
+        .eq("status", "Aktív")
+        .order("start_date", { ascending: false })
+        .limit(1)
+
+      if (activeRentalQuery.error) {
+        throw activeRentalQuery.error
+      }
+
+      const activeRental = activeRentalQuery.data?.[0]
+
+      if (!activeRental?.id) {
+        throw new Error("Nem található aktív bérlés ehhez a géphez.")
+      }
+
+      const rentalUpdate = await supabase
+        .from("rentals")
+        .update({ end_date: newEndDate })
+        .eq("id", activeRental.id)
+
+      if (rentalUpdate.error) {
+        throw rentalUpdate.error
+      }
+
+      const machineUpdate = await supabase
+        .from("machines")
+        .update({ rental_end: newEndDate })
+        .eq("id", machine.id)
+
+      if (machineUpdate.error) {
+        throw machineUpdate.error
+      }
+
+      setRentalEndSelections((prev) => ({
+        ...prev,
+        [machine.id]: newEndDate,
+      }))
+
+      await fetchMachines()
+      alert("A bérlés lejárata sikeresen módosítva.")
+    } catch (error: any) {
+      console.error("Hiba lejárat módosítása közben:", error)
+      alert(
+        getSupabaseErrorMessage(error, "Nem sikerült módosítani a bérlés lejáratát.")
+      )
+    } finally {
+      setUpdatingRentalId(null)
     }
   }
 
@@ -1730,6 +1806,7 @@ export default function Dashboard() {
               <th style={cellStyle}>Státusz</th>
               <th style={cellStyle}>Bérlő / Lokáció</th>
               <th style={cellStyle}>Lejárat</th>
+              <th style={cellStyle}>Új lejárat</th>
               <th style={cellStyle}>Új státusz</th>
               <th style={cellStyle}>Művelet</th>
             </tr>
@@ -1770,6 +1847,24 @@ export default function Dashboard() {
                 </td>
 
                 <td style={cellStyle}>
+                  {m.current_customer ? (
+                    <input
+                      type="date"
+                      value={rentalEndSelections[m.id] ?? m.rental_end ?? ""}
+                      onChange={(e) =>
+                        setRentalEndSelections((prev) => ({
+                          ...prev,
+                          [m.id]: e.target.value,
+                        }))
+                      }
+                      style={inputStyle}
+                    />
+                  ) : (
+                    "-"
+                  )}
+                </td>
+
+                <td style={cellStyle}>
                   <select
                     value={machineStatusSelections[m.id] || ""}
                     onChange={(e) =>
@@ -1806,6 +1901,24 @@ export default function Dashboard() {
                     >
                       {updatingMachineId === m.id ? "Mentés..." : "Státusz mentése"}
                     </button>
+
+                    {m.current_customer && (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateRentalEnd(m)}
+                        disabled={updatingRentalId === m.id}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: "8px",
+                          border: "1px solid #ddd",
+                          background: "#fff3cd",
+                          cursor: "pointer",
+                          fontWeight: "bold",
+                        }}
+                      >
+                        {updatingRentalId === m.id ? "Mentés..." : "Lejárat módosítása"}
+                      </button>
+                    )}
 
                     {m.current_customer && (
                       <button
