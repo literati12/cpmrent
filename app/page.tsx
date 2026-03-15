@@ -188,6 +188,7 @@ export default function Dashboard() {
   const [savingCustomer, setSavingCustomer] = useState(false)
   const [savingRequest, setSavingRequest] = useState(false)
   const [assigningRequestId, setAssigningRequestId] = useState<string | null>(null)
+  const [reservingRequestId, setReservingRequestId] = useState<string | null>(null)
   const [updatingMachineId, setUpdatingMachineId] = useState<string | null>(null)
   const [removingCustomerId, setRemovingCustomerId] = useState<string | null>(null)
 
@@ -346,6 +347,18 @@ export default function Dashboard() {
 
   const isStatus = (m: Machine, val: string) =>
     (m.status || "").toLowerCase() === val.toLowerCase()
+
+  const isMachineImmediatelyAssignable = (machine: Machine) =>
+    ["szabad", "tartalék", "lefoglalt"].includes((machine.status || "").toLowerCase()) &&
+    !machine.current_customer
+
+  const isMachineReservableForNext = (machine: Machine) => {
+    if (isMachineImmediatelyAssignable(machine)) return true
+
+    const daysUntil = getDaysUntil(machine.rental_end)
+
+    return isStatus(machine, "Kiadva") && daysUntil !== null && daysUntil >= 0 && daysUntil <= 4
+  }
 
   // --- KEZELŐ FÜGGVÉNYEK ---
 
@@ -796,6 +809,62 @@ export default function Dashboard() {
     }
   }
 
+  async function handleReserveRequestToMachine(request: RequestItem) {
+    const selectedMachineId = requestMachineSelections[request.id]
+
+    if (!selectedMachineId) {
+      alert("Először válassz gépet a várakozóhoz.")
+      return
+    }
+
+    const selectedMachine = machines.find((m) => m.id === selectedMachineId)
+
+    if (!selectedMachine) {
+      alert("A kiválasztott gép nem található.")
+      return
+    }
+
+    if (!isMachineReservableForNext(selectedMachine)) {
+      alert("Erre a gépre most nem lehet előfoglalást tenni.")
+      return
+    }
+
+    setReservingRequestId(request.id)
+
+    try {
+      const requestUpdate = await supabase
+        .from("requests")
+        .update({
+          status: "lefoglalva",
+          assigned_machine_id: selectedMachineId,
+        })
+        .eq("id", request.id)
+
+      if (requestUpdate.error) {
+        throw requestUpdate.error
+      }
+
+      if (isMachineImmediatelyAssignable(selectedMachine)) {
+        const machineUpdate = await supabase
+          .from("machines")
+          .update({ status: "Lefoglalt" })
+          .eq("id", selectedMachineId)
+
+        if (machineUpdate.error) {
+          throw machineUpdate.error
+        }
+      }
+
+      await Promise.all([fetchMachines(), fetchRequests()])
+      alert("A várakozó sikeresen lefoglalva a kiválasztott gépre.")
+    } catch (error: any) {
+      console.error("Hiba előfoglalás közben:", error)
+      alert(getSupabaseErrorMessage(error, "Nem sikerült lefoglalni a várakozót."))
+    } finally {
+      setReservingRequestId(null)
+    }
+  }
+
   async function handleUpdateRentalEnd(machine: Machine) {
     const newEndDate = rentalEndSelections[machine.id] || machine.rental_end
 
@@ -1184,12 +1253,12 @@ async function handleUpdateMachineStatus(machineId: string) {
   }, [machines, filter])
 
   const rentableMachines = useMemo(
-    () =>
-      machines.filter((m) =>
-        ["szabad", "tartalék", "lefoglalt"].includes(
-          (m.status || "").toLowerCase()
-        )
-      ),
+    () => machines.filter((m) => isMachineImmediatelyAssignable(m)),
+    [machines]
+  )
+
+  const reservableMachines = useMemo(
+    () => machines.filter((m) => isMachineReservableForNext(m)),
     [machines]
   )
 
@@ -1209,6 +1278,37 @@ async function handleUpdateMachineStatus(machineId: string) {
 
     return map
   }, [activeRentals])
+
+  const reservedRequests = useMemo(
+    () =>
+      requests.filter(
+        (r) =>
+          r.assigned_machine_id &&
+          ["lefoglalva", "párosítva"].includes((r.status || "").toLowerCase())
+      ),
+    [requests]
+  )
+
+  const nextReservedRequestByMachineId = useMemo(() => {
+    const map: Record<string, RequestItem> = {}
+
+    for (const request of reservedRequests) {
+      if (request.assigned_machine_id && !map[request.assigned_machine_id]) {
+        map[request.assigned_machine_id] = request
+      }
+    }
+
+    return map
+  }, [reservedRequests])
+
+  const soonExpiringIssuedMachines = useMemo(
+    () =>
+      machines.filter((machine) => {
+        const days = getDaysUntil(machine.rental_end)
+        return isStatus(machine, "Kiadva") && days !== null && days >= 0 && days <= 4
+      }),
+    [machines]
+  )
 
   const activeCustomerRows = useMemo<ActiveCustomerRow[]>(() => {
     const rows: ActiveCustomerRow[] = []
@@ -1659,6 +1759,7 @@ async function handleUpdateMachineStatus(machineId: string) {
               >
                 <option value="várakozik">várakozik</option>
                 <option value="párosítva">párosítva</option>
+                <option value="lefoglalva">lefoglalva</option>
                 <option value="aktív">aktív</option>
                 <option value="visszamondta">visszamondta</option>
               </select>
@@ -1749,11 +1850,21 @@ async function handleUpdateMachineStatus(machineId: string) {
                           style={inputStyle}
                         >
                           <option value="">Válassz gépet...</option>
-                          {rentableMachines.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name} ({m.status})
-                            </option>
-                          ))}
+                          {reservableMachines.map((m) => {
+                            const days = getDaysUntil(m.rental_end)
+                            const isSoonIssued =
+                              (m.status || "").toLowerCase() === "kiadva" &&
+                              days !== null &&
+                              days >= 0 &&
+                              days <= 4
+
+                            return (
+                              <option key={m.id} value={m.id}>
+                                {m.name} ({m.status}
+                                {isSoonIssued ? `, ${days === 0 ? "ma" : `${days} nap`} múlva szabadul` : ""})
+                              </option>
+                            )
+                          })}
                         </select>
                       )}
                     </td>
@@ -1775,6 +1886,26 @@ async function handleUpdateMachineStatus(machineId: string) {
                             }}
                           >
                             {assigningRequestId === r.id ? "Folyamatban..." : "Gépre ad"}
+                          </button>
+                        )}
+
+                        {r.status !== "aktív" && r.status !== "visszamondta" && (
+                          <button
+                            type="button"
+                            onClick={() => handleReserveRequestToMachine(r)}
+                            disabled={reservingRequestId === r.id}
+                            style={{
+                              padding: "8px 10px",
+                              borderRadius: "8px",
+                              border: "1px solid #ddd",
+                              background: "#eef2ff",
+                              cursor: "pointer",
+                              fontWeight: "bold",
+                            }}
+                          >
+                            {reservingRequestId === r.id
+                              ? "Folyamatban..."
+                              : "Következőnek lefoglal"}
                           </button>
                         )}
 
@@ -1813,6 +1944,64 @@ async function handleUpdateMachineStatus(machineId: string) {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section style={cardStyle}>
+        <h2 style={{ marginTop: 0, marginBottom: "16px" }}>4 napon belül felszabaduló kiadott gépek</h2>
+
+        {soonExpiringIssuedMachines.length === 0 ? (
+          <p style={{ color: "#666", margin: 0 }}>Nincs 4 napon belül lejáró kiadott gép.</p>
+        ) : (
+          <div
+            style={{
+              overflowX: "auto",
+              background: "#fff",
+              borderRadius: "12px",
+            }}
+          >
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#111", color: "#fff" }}>
+                  <th style={cellStyle}>Gép</th>
+                  <th style={cellStyle}>Aktuális bérlő</th>
+                  <th style={cellStyle}>Lejárat</th>
+                  <th style={cellStyle}>Nap múlva</th>
+                  <th style={cellStyle}>Következő ügyfél</th>
+                </tr>
+              </thead>
+              <tbody>
+                {soonExpiringIssuedMachines.map((machine) => {
+                  const nextRequest = nextReservedRequestByMachineId[machine.id]
+                  const days = getDaysUntil(machine.rental_end)
+
+                  return (
+                    <tr key={machine.id}>
+                      <td style={cellStyle}>
+                        <strong>{machine.name || "-"}</strong>
+                      </td>
+                      <td style={cellStyle}>{machine.current_customer || "-"}</td>
+                      <td style={cellStyle}>{machine.rental_end || "-"}</td>
+                      <td style={cellStyle}>
+                        {days === null ? "-" : days === 0 ? "Ma" : `${days} nap`}
+                      </td>
+                      <td style={cellStyle}>
+                        {nextRequest ? (
+                          <>
+                            <strong>{nextRequest.name || "-"}</strong>
+                            <br />
+                            <small>{nextRequest.status || "-"}</small>
+                          </>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
