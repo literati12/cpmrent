@@ -63,22 +63,21 @@ const initialCustomers: Customer[] = [
   },
 ];
 
-function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
-}
+const emptyForm: CustomerForm = {
+  full_name: "",
+  email: "",
+  phone: "",
+  location: "",
+  notes: "",
+};
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>(initialCustomers);
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formError, setFormError] = useState("");
-  const [form, setForm] = useState<CustomerForm>({
-    full_name: "",
-    email: "",
-    phone: "",
-    location: "",
-    notes: "",
-  });
+  const [form, setForm] = useState<CustomerForm>(emptyForm);
 
   const filteredCustomers = useMemo(() => {
     return customers.filter((customer) => {
@@ -96,41 +95,106 @@ export default function CustomersPage() {
     });
   }, [customers, search]);
 
-  function handleAddCustomer() {
-    setFormError("");
+  const summary = useMemo(() => {
+    return {
+      total: customers.length,
+      miskolc: customers.filter((c) =>
+        c.location.toLowerCase().includes("miskolc")
+      ).length,
+      withEmail: customers.filter((c) => c.email.trim() !== "").length,
+      withPhone: customers.filter((c) => c.phone.trim() !== "").length,
+    };
+  }, [customers]);
 
+  function resetForm() {
+    setForm(emptyForm);
+    setFormError("");
+    setShowAddForm(false);
+    setEditingId(null);
+  }
+
+  function startAddMode() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setFormError("");
+    setShowAddForm(true);
+  }
+
+  function startEditMode(customer: Customer) {
+    setEditingId(customer.id);
+    setForm({
+      full_name: customer.full_name,
+      email: customer.email,
+      phone: customer.phone,
+      location: customer.location,
+      notes: customer.notes ?? "",
+    });
+    setFormError("");
+    setShowAddForm(true);
+  }
+
+  function validateForm() {
     if (!form.full_name.trim() || !form.email.trim() || !form.location.trim()) {
       setFormError("A név, email és lokáció kötelező.");
-      return;
+      return false;
     }
 
-    const exists = customers.some(
-      (customer) => customer.email.toLowerCase() === form.email.trim().toLowerCase()
+    const emailExists = customers.some(
+      (customer) =>
+        customer.email.toLowerCase() === form.email.trim().toLowerCase() &&
+        customer.id !== editingId
     );
 
-    if (exists) {
+    if (emailExists) {
       setFormError("Ez az email már szerepel az ügyfelek között.");
-      return;
+      return false;
     }
 
-    const newCustomer: Customer = {
-      id: crypto.randomUUID(),
-      full_name: form.full_name.trim(),
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      location: form.location.trim(),
-      notes: form.notes.trim(),
-    };
+    return true;
+  }
 
-    setCustomers((prev) => [newCustomer, ...prev]);
-    setForm({
-      full_name: "",
-      email: "",
-      phone: "",
-      location: "",
-      notes: "",
-    });
-    setShowAddForm(false);
+  function handleSaveCustomer() {
+    setFormError("");
+
+    if (!validateForm()) return;
+
+    if (editingId) {
+      setCustomers((prev) =>
+        prev.map((customer) =>
+          customer.id === editingId
+            ? {
+                ...customer,
+                full_name: form.full_name.trim(),
+                email: form.email.trim(),
+                phone: form.phone.trim(),
+                location: form.location.trim(),
+                notes: form.notes.trim(),
+              }
+            : customer
+        )
+      );
+    } else {
+      const newCustomer: Customer = {
+        id: crypto.randomUUID(),
+        full_name: form.full_name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        location: form.location.trim(),
+        notes: form.notes.trim(),
+      };
+
+      setCustomers((prev) => [newCustomer, ...prev]);
+    }
+
+    resetForm();
+  }
+
+  function handleDeleteCustomer(id: string) {
+    setCustomers((prev) => prev.filter((customer) => customer.id !== id));
+
+    if (editingId === id) {
+      resetForm();
+    }
   }
 
   return (
@@ -146,7 +210,7 @@ export default function CustomersPage() {
                 Ügyfelek
               </h1>
               <p className="mt-2 text-sm text-slate-600">
-                Ügyféltörzs, elérhetőségek és alap adatok egy helyen.
+                Ügyféltörzs, elérhetőségek és meglévő rekordok szerkesztése egy helyen.
               </p>
             </div>
 
@@ -158,7 +222,7 @@ export default function CustomersPage() {
                 Dashboard
               </Link>
               <button
-                onClick={() => setShowAddForm((prev) => !prev)}
+                onClick={startAddMode}
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
               >
                 + Új ügyfél
@@ -168,27 +232,22 @@ export default function CustomersPage() {
         </section>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard title="Összes ügyfél" value={`${customers.length} db`} />
-          <StatCard
-            title="Miskolc / környék"
-            value={`${customers.filter((c) => c.location.toLowerCase().includes("miskolc")).length} db`}
-          />
-          <StatCard
-            title="Emaillel rendelkező"
-            value={`${customers.filter((c) => c.email).length} db`}
-          />
-          <StatCard
-            title="Telefonnal rendelkező"
-            value={`${customers.filter((c) => c.phone).length} db`}
-          />
+          <StatCard title="Összes ügyfél" value={`${summary.total} db`} />
+          <StatCard title="Miskolc / környék" value={`${summary.miskolc} db`} />
+          <StatCard title="Emaillel rendelkező" value={`${summary.withEmail} db`} />
+          <StatCard title="Telefonnal rendelkező" value={`${summary.withPhone} db`} />
         </section>
 
         {showAddForm ? (
           <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <div className="mb-5">
-              <h2 className="text-lg font-bold text-slate-900">Új ügyfél felvitele</h2>
+              <h2 className="text-lg font-bold text-slate-900">
+                {editingId ? "Ügyfél szerkesztése" : "Új ügyfél felvitele"}
+              </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Itt a customer törzsadat kerül be a rendszerbe.
+                {editingId
+                  ? "A meglévő ügyféladatokat itt tudod módosítani."
+                  : "Itt a customer törzsadat kerül be a rendszerbe."}
               </p>
             </div>
 
@@ -245,13 +304,13 @@ export default function CustomersPage() {
 
             <div className="mt-5 flex flex-wrap gap-3">
               <button
-                onClick={handleAddCustomer}
+                onClick={handleSaveCustomer}
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
               >
-                Mentés
+                {editingId ? "Módosítás mentése" : "Mentés"}
               </button>
               <button
-                onClick={() => setShowAddForm(false)}
+                onClick={resetForm}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
               >
                 Mégse
@@ -282,9 +341,26 @@ export default function CustomersPage() {
           <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
             {filteredCustomers.map((customer) => (
               <article key={customer.id} className="rounded-3xl border border-slate-200 p-5">
-                <div className="flex flex-col gap-2">
-                  <h3 className="text-lg font-bold text-slate-900">{customer.full_name}</h3>
-                  <p className="text-sm text-slate-600">{customer.email}</p>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900">{customer.full_name}</h3>
+                    <p className="mt-1 text-sm text-slate-600">{customer.email}</p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => startEditMode(customer)}
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
+                    >
+                      Szerkesztés
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCustomer(customer.id)}
+                      className="rounded-2xl bg-red-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+                    >
+                      Törlés
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
