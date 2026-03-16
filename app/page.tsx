@@ -1,1213 +1,653 @@
-"use client"
+"use client";
 
-import { useEffect, useMemo, useState } from "react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { supabase } from "../lib/supabaseClient"
+import Link from "next/link";
 
-// --- Típusdefiníciók ---
+type RentalStatus = "active" | "finished" | "waiting" | "cancelled";
+type MachineStatus = "available" | "rented" | "service";
+
 type Machine = {
-  id: string
-  name: string | null
-  type: string | null
-  status: string | null
-  location: string | null
-  current_customer: string | null
-  rental_start: string | null
-  rental_end: string | null
-  notes: string | null
-}
+  id: string;
+  name: string;
+  type: string;
+  status: MachineStatus;
+  location: string | null;
+  notes?: string | null;
+};
 
 type Customer = {
-  id: string
-  name: string | null
-  phone: string | null
-  email: string | null
-  city: string | null
-  address: string | null
-  notes: string | null
-}
-
-type RequestItem = {
-  id: string
-  name: string | null
-  phone: string | null
-  email: string | null
-  city: string | null
-  address: string | null
-  requested_start_date: string | null
-  requested_duration_days: number | null
-  status: string | null
-  assigned_machine_id: string | null
-  priority: number | null
-  notes: string | null
-  created_at?: string | null
-}
+  id: string;
+  name: string;
+  city?: string | null;
+  phone?: string | null;
+};
 
 type Rental = {
-  id: string
-  machine_id: string | null
-  customer_id: string | null
-  start_date: string | null
-  end_date: string | null
-  status: string | null
-  created_at?: string | null
-  berleti_dij: number | null
-  fizetett_osszeg: number | null
-  tartozas: number | null
-  note: string | null
-  visszaszallitas_modja: string | null
+  id: string;
+  machine_id: string;
+  customer_id: string;
+  start_date: string;
+  end_date: string;
+  status: RentalStatus;
+  berleti_dij: number;
+  fizetett_osszeg: number;
+  tartozas: number;
+  note?: string | null;
+};
+
+type RequestItem = {
+  id: string;
+  name: string;
+  city?: string | null;
+  phone?: string | null;
+  status: string;
+  priority?: number | null;
+  requested_start_date?: string | null;
+};
+
+type UtilizationRow = {
+  machineId: string;
+  machineName: string;
+  rentedDays: number;
+  daysInMonth: number;
+  utilization: number;
+  revenue: number;
+};
+
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
 }
 
-type ActiveCustomerRow = {
-  customer: Customer
-  machine: Machine
-  rental: Rental | null
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("hu-HU", {
+    style: "currency",
+    currency: "HUF",
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
-type FilterType =
-  | "összes"
-  | "foglalt"
-  | "szabad"
-  | "lejáró"
-  | "lejárt"
-  | "tartalék"
-  | "javítás"
-
-type NewMachineForm = {
-  name: string
-  type: string
-  status: string
-  location: string
-  current_customer: string
-  rental_start: string
-  rental_end: string
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("hu-HU").format(new Date(value));
 }
 
-type NewRentalForm = {
-  machine_id: string
-  customer_id: string
-  start_date: string
-  end_date: string
-  berleti_dij: string
-  fizetett_osszeg: string
-  visszaszallitas_modja: string
-  status: string
-  notes: string
+function diffInDays(from: Date, to: Date) {
+  const ms = to.getTime() - from.getTime();
+  return Math.max(0, Math.ceil(ms / (1000 * 60 * 60 * 24)));
 }
 
-type NewCustomerForm = {
-  name: string
-  phone: string
-  email: string
-  city: string
-  address: string
-  notes: string
+function overlapDays(startA: Date, endA: Date, startB: Date, endB: Date) {
+  const start = new Date(Math.max(startA.getTime(), startB.getTime()));
+  const end = new Date(Math.min(endA.getTime(), endB.getTime()));
+  if (end < start) return 0;
+  return Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 }
 
-type NewRequestForm = {
-  name: string
-  phone: string
-  email: string
-  city: string
-  address: string
-  requested_start_date: string
-  requested_duration_days: string
-  status: string
-  priority: string
-  notes: string
+function getMonthRange(baseDate = new Date()) {
+  const start = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+  const end = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0);
+  return { start, end, daysInMonth: end.getDate() };
 }
 
-const initialMachineForm: NewMachineForm = {
-  name: "",
-  type: "Kinetec Spectra",
-  status: "Szabad",
-  location: "",
-  current_customer: "",
-  rental_start: "",
-  rental_end: "",
+function getPreviousMonthRange(baseDate = new Date()) {
+  const start = new Date(baseDate.getFullYear(), baseDate.getMonth() - 1, 1);
+  const end = new Date(baseDate.getFullYear(), baseDate.getMonth(), 0);
+  return { start, end, daysInMonth: end.getDate() };
 }
 
-const initialRentalForm: NewRentalForm = {
-  machine_id: "",
-  customer_id: "",
-  start_date: "",
-  end_date: "",
-  berleti_dij: "",
-  fizetett_osszeg: "",
-  visszaszallitas_modja: "Én megyek érte",
-  status: "Aktív",
-  notes: "",
-}
+function buildUtilizationRows(machines: Machine[], rentals: Rental[], range: { start: Date; end: Date; daysInMonth: number }): UtilizationRow[] {
+  return machines.map((machine) => {
+    const machineRentals = rentals.filter(
+      (r) => r.machine_id === machine.id && ["active", "finished"].includes(r.status)
+    );
 
-const initialCustomerForm: NewCustomerForm = {
-  name: "",
-  phone: "",
-  email: "",
-  city: "",
-  address: "",
-  notes: "",
-}
-
-const initialRequestForm: NewRequestForm = {
-  name: "",
-  phone: "",
-  email: "",
-  city: "",
-  address: "",
-  requested_start_date: "",
-  requested_duration_days: "14",
-  status: "várakozik",
-  priority: "1",
-  notes: "",
-}
-
-function getSupabaseErrorMessage(error: any, fallback: string) {
-  if (!error) return fallback
-
-  const parts = [
-    error.message,
-    error.details,
-    error.hint,
-    error.code ? `Kód: ${error.code}` : null,
-  ].filter(Boolean)
-
-  return parts.length ? parts.join(" | ") : fallback
-}
-
-export default function Dashboard() {
-  const router = useRouter()
-
-  const [machines, setMachines] = useState<Machine[]>([])
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [requests, setRequests] = useState<RequestItem[]>([])
-  const [rentals, setRentals] = useState<Rental[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const [savingMachine, setSavingMachine] = useState(false)
-  const [savingRental, setSavingRental] = useState(false)
-  const [savingCustomer, setSavingCustomer] = useState(false)
-  const [savingRequest, setSavingRequest] = useState(false)
-  const [assigningRequestId, setAssigningRequestId] = useState<string | null>(null)
-  const [reservingRequestId, setReservingRequestId] = useState<string | null>(null)
-  const [updatingMachineId, setUpdatingMachineId] = useState<string | null>(null)
-  const [removingCustomerId, setRemovingCustomerId] = useState<string | null>(null)
-
-  const [filter, setFilter] = useState<FilterType>("összes")
-
-  const [machineForm, setMachineForm] = useState<NewMachineForm>(initialMachineForm)
-  const [rentalForm, setRentalForm] = useState<NewRentalForm>(initialRentalForm)
-  const [customerForm, setCustomerForm] = useState<NewCustomerForm>(initialCustomerForm)
-  const [requestForm, setRequestForm] = useState<NewRequestForm>(initialRequestForm)
-
-  const [machineMessage, setMachineMessage] = useState("")
-  const [rentalMessage, setRentalMessage] = useState("")
-  const [customerMessage, setCustomerMessage] = useState("")
-  const [requestMessage, setRequestMessage] = useState("")
-
-  const [showAddMachineForm, setShowAddMachineForm] = useState(false)
-  const [showAddRentalForm, setShowAddRentalForm] = useState(false)
-  const [showNewCustomerForm, setShowNewCustomerForm] = useState(false)
-  const [showAddRequestForm, setShowAddRequestForm] = useState(false)
-
-  const [requestMachineSelections, setRequestMachineSelections] = useState<Record<string, string>>({})
-  const [machineStatusSelections, setMachineStatusSelections] = useState<Record<string, string>>({})
-  const [rentalEndSelections, setRentalEndSelections] = useState<Record<string, string>>({})
-  const [updatingRentalId, setUpdatingRentalId] = useState<string | null>(null)
-  const [rentalDebtSelections, setRentalDebtSelections] = useState<Record<string, string>>({})
-  const [rentalReturnModeSelections, setRentalReturnModeSelections] = useState<Record<string, string>>({})
-  const [savingRentalDetailsId, setSavingRentalDetailsId] = useState<string | null>(null)
-
-  useEffect(() => {
-    checkUser()
-  }, [])
-
-  async function checkUser() {
-    const { data, error } = await supabase.auth.getUser()
-
-    if (error || !data.user) {
-      router.push("/login")
-      return
-    }
-
-    await loadAllData()
-  }
-
-  async function logout() {
-    await supabase.auth.signOut()
-    router.push("/login")
-  }
-
-  async function loadAllData() {
-    setLoading(true)
-    await Promise.all([fetchMachines(), fetchCustomers(), fetchRequests(), fetchRentals()])
-    setLoading(false)
-  }
-
-  async function fetchMachines() {
-    const { data, error } = await supabase
-      .from("machines")
-      .select("*")
-      .order("name", { ascending: true })
-
-    if (error) {
-      console.error("Hiba a gépek lekérésekor:", {
-        raw: error,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      })
-    } else {
-      setMachines(data || [])
-    }
-  }
-
-  async function fetchCustomers() {
-    const { data, error } = await supabase
-      .from("customers")
-      .select("*")
-      .order("name", { ascending: true })
-
-    if (error) {
-      console.error("Hiba a bérlők lekérésekor:", {
-        raw: error,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      })
-    } else {
-      setCustomers(data || [])
-    }
-  }
-
-  async function fetchRequests() {
-    const { data, error } = await supabase
-      .from("requests")
-      .select("*")
-      .order("created_at", { ascending: false })
-
-    if (error) {
-      console.error("Hiba a várólista lekérésekor:", {
-        raw: error,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      })
-    } else {
-      setRequests(data || [])
-    }
-  }
-
-  async function fetchRentals() {
-    const { data, error } = await supabase
-      .from("rentals")
-      .select("*")
-      .order("start_date", { ascending: false })
-
-    if (error) {
-      console.error("Hiba a bérlések lekérésekor:", {
-        raw: error,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      })
-    } else {
-      setRentals(data || [])
-    }
-  }
-
-  // --- SEGÉDFÜGGVÉNYEK ---
-
-  const parseLocalDate = (dateString: string) => {
-    const [year, month, day] = dateString.split("-").map(Number)
-    return new Date(year, month - 1, day)
-  }
-
-  const formatDateToYMD = (date: Date) => {
-    const y = date.getFullYear()
-    const m = String(date.getMonth() + 1).padStart(2, "0")
-    const d = String(date.getDate()).padStart(2, "0")
-    return `${y}-${m}-${d}`
-  }
-
-  const getDaysUntil = (dateString: string | null) => {
-    if (!dateString) return null
-
-    const end = parseLocalDate(dateString)
-    const start = new Date()
-
-    end.setHours(0, 0, 0, 0)
-    start.setHours(0, 0, 0, 0)
-
-    return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-  }
-
-  const isStatus = (m: Machine, val: string) =>
-    (m.status || "").toLowerCase() === val.toLowerCase()
-
-  const isMachineImmediatelyAssignable = (machine: Machine) =>
-    ["szabad", "tartalék", "lefoglalt"].includes((machine.status || "").toLowerCase()) &&
-    !machine.current_customer
-
-  const isMachineReservableForNext = (machine: Machine) => {
-    if (isMachineImmediatelyAssignable(machine)) return true
-
-    const daysUntil = getDaysUntil(machine.rental_end)
-
-    return isStatus(machine, "Kiadva") && daysUntil !== null && daysUntil >= 0 && daysUntil <= 4
-  }
-
-  // --- KEZELŐ FÜGGVÉNYEK ---
-  async function handleAddCustomer(e: React.MouseEvent | React.FormEvent) {
-    e.preventDefault()
-    setCustomerMessage("")
-
-    if (!customerForm.name.trim()) {
-      setCustomerMessage("A bérlő neve kötelező.")
-      return
-    }
-
-    setSavingCustomer(true)
-
-    const payload = {
-      name: customerForm.name.trim(),
-      phone: customerForm.phone.trim() || null,
-      email: customerForm.email.trim() || null,
-      city: customerForm.city.trim() || null,
-      address: customerForm.address.trim() || null,
-      notes: customerForm.notes.trim() || null,
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from("customers")
-        .insert([payload])
-        .select()
-        .single()
-
-      if (error) {
-        console.error("Hiba bérlő mentés közben:", {
-          raw: error,
-          payload,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        })
-        setCustomerMessage(
-          getSupabaseErrorMessage(error, "Hiba történt az új bérlő mentésénél.")
+    const rentedDays = machineRentals.reduce((sum, rental) => {
+      return (
+        sum +
+        overlapDays(
+          new Date(rental.start_date),
+          new Date(rental.end_date),
+          range.start,
+          range.end
         )
-        return
-      }
-
-      setCustomerMessage("Új bérlő sikeresen létrehozva.")
-      await fetchCustomers()
-      setRentalForm((prev) => ({ ...prev, customer_id: data.id }))
-      setCustomerForm(initialCustomerForm)
-      setShowNewCustomerForm(false)
-    } catch (error: any) {
-      console.error("Váratlan hiba bérlő mentés közben:", error)
-      setCustomerMessage(
-        getSupabaseErrorMessage(error, "Váratlan hiba történt bérlő mentés közben.")
-      )
-    } finally {
-      setSavingCustomer(false)
-    }
-  }
-
-  async function handleAddMachine(e: React.FormEvent) {
-    e.preventDefault()
-    setMachineMessage("")
-
-    if (!machineForm.name.trim()) {
-      setMachineMessage("A gép neve kötelező.")
-      return
-    }
-
-    setSavingMachine(true)
-
-    const payload = {
-      name: machineForm.name.trim(),
-      type: machineForm.type.trim() || null,
-      status: machineForm.status || "Szabad",
-      location: machineForm.location.trim() || null,
-      current_customer: machineForm.current_customer.trim() || null,
-      rental_start: machineForm.rental_start || null,
-      rental_end: machineForm.rental_end || null,
-      notes: null,
-    }
-
-    try {
-      const response = await supabase.from("machines").insert([payload]).select()
-
-      if (response.error) {
-        console.error("Hiba történt gép mentés közben:", {
-          raw: response.error,
-          payload,
-          message: response.error.message,
-          details: response.error.details,
-          hint: response.error.hint,
-          code: response.error.code,
-        })
-
-        setMachineMessage(
-          getSupabaseErrorMessage(response.error, "Hiba történt gép mentés közben.")
-        )
-        return
-      }
-
-      setMachineMessage("Sikeres mentés.")
-      setMachineForm(initialMachineForm)
-      setShowAddMachineForm(false)
-      await Promise.all([fetchMachines(), fetchRentals()])
-    } catch (error: any) {
-      console.error("Váratlan hiba gép mentés közben:", error)
-      setMachineMessage(
-        getSupabaseErrorMessage(error, "Váratlan hiba történt gép mentés közben.")
-      )
-    } finally {
-      setSavingMachine(false)
-    }
-  }
-
-  async function handleAddRental(e: React.FormEvent) {
-    e.preventDefault()
-    setRentalMessage("")
-
-    if (
-      !rentalForm.machine_id ||
-      !rentalForm.customer_id ||
-      !rentalForm.start_date ||
-      !rentalForm.end_date
-    ) {
-      setRentalMessage("Minden kötelező mezőt tölts ki.")
-      return
-    }
-
-    if (rentalForm.end_date < rentalForm.start_date) {
-      setRentalMessage("A záró dátum nem lehet korábbi, mint a kezdő dátum.")
-      return
-    }
-
-    const berletiDij = Number(rentalForm.berleti_dij || 0)
-    const fizetettOsszeg = Number(rentalForm.fizetett_osszeg || 0)
-
-    if (Number.isNaN(berletiDij) || Number.isNaN(fizetettOsszeg)) {
-      setRentalMessage("A díj és a fizetett összeg csak szám lehet.")
-      return
-    }
-
-    const tartozas = Math.max(berletiDij - fizetettOsszeg, 0)
-
-    const selectedMachine = machines.find((m) => m.id === rentalForm.machine_id)
-    const selectedCustomer = customers.find((c) => c.id === rentalForm.customer_id)
-
-    if (!selectedMachine || !selectedCustomer) {
-      setRentalMessage("A kiválasztott gép vagy bérlő nem található.")
-      return
-    }
-
-    setSavingRental(true)
-
-    const rentalPayload = {
-      machine_id: rentalForm.machine_id,
-      customer_id: rentalForm.customer_id,
-      start_date: rentalForm.start_date,
-      end_date: rentalForm.end_date,
-      berleti_dij: berletiDij,
-      fizetett_osszeg: fizetettOsszeg,
-      tartozas,
-      visszaszallitas_modja: rentalForm.visszaszallitas_modja,
-      status: rentalForm.status,
-      note: rentalForm.notes.trim() || null,
-    }
-
-    const machinePayload = {
-      status: "Kiadva",
-      current_customer: selectedCustomer.name,
-      rental_start: rentalForm.start_date,
-      rental_end: rentalForm.end_date,
-      location: selectedCustomer.city || selectedMachine.location,
-    }
-
-    try {
-      const rentalInsert = await supabase.from("rentals").insert([rentalPayload]).select()
-      if (rentalInsert.error) throw rentalInsert.error
-
-      const machineUpdate = await supabase
-        .from("machines")
-        .update(machinePayload)
-        .eq("id", rentalForm.machine_id)
-        .select()
-
-      if (machineUpdate.error) throw machineUpdate.error
-
-      setRentalMessage("Bérlés rögzítve.")
-      setRentalForm(initialRentalForm)
-      setShowAddRentalForm(false)
-      await Promise.all([fetchMachines(), fetchRentals()])
-    } catch (error: any) {
-      console.error("Váratlan hiba bérlés rögzítés közben:", error)
-      setRentalMessage(getSupabaseErrorMessage(error, "Váratlan hiba történt a bérlés rögzítése közben."))
-    } finally {
-      setSavingRental(false)
-    }
-  }
-
-  async function handleAddRequest(e: React.FormEvent) {
-    e.preventDefault()
-    setRequestMessage("")
-    if (!requestForm.name.trim()) {
-      setRequestMessage("A várakozó neve kötelező.")
-      return
-    }
-
-    setSavingRequest(true)
-
-    const payload = {
-      name: requestForm.name.trim(),
-      phone: requestForm.phone.trim() || null,
-      email: requestForm.email.trim() || null,
-      city: requestForm.city.trim() || null,
-      address: requestForm.address.trim() || null,
-      requested_start_date: requestForm.requested_start_date || null,
-      requested_duration_days: Number(requestForm.requested_duration_days || 0) || null,
-      status: requestForm.status || "várakozik",
-      priority: Number(requestForm.priority || 1) || 1,
-      notes: requestForm.notes.trim() || null,
-    }
-
-    try {
-      const { error } = await supabase.from("requests").insert([payload])
-      if (error) throw error
-
-      setRequestMessage("Várakozó sikeresen rögzítve.")
-      setRequestForm(initialRequestForm)
-      setShowAddRequestForm(false)
-      await fetchRequests()
-    } catch (error: any) {
-      console.error("Váratlan hiba várakozó mentés közben:", error)
-      setRequestMessage(getSupabaseErrorMessage(error, "Váratlan hiba történt várakozó mentés közben."))
-    } finally {
-      setSavingRequest(false)
-    }
-  }
-
-  async function handleMarkRequestCancelled(requestId: string) {
-    const confirmed = window.confirm("Biztosan visszamondta státuszra állítod?")
-    if (!confirmed) return
-
-    const { error } = await supabase.from("requests").update({ status: "visszamondta" }).eq("id", requestId)
-    if (error) {
-      alert(getSupabaseErrorMessage(error, "Nem sikerült frissíteni a státuszt."))
-      return
-    }
-    await fetchRequests()
-  }
-
-  async function handleDeleteRequest(requestId: string) {
-    const confirmed = window.confirm("Biztosan törlöd ezt a várakozót?")
-    if (!confirmed) return
-
-    const { error } = await supabase.from("requests").delete().eq("id", requestId)
-    if (error) {
-      alert(getSupabaseErrorMessage(error, "Nem sikerült törölni a várakozót."))
-      return
-    }
-    await fetchRequests()
-  }
-
-  async function handleAssignRequestToMachine(request: RequestItem) {
-    const selectedMachineId = requestMachineSelections[request.id]
-    if (!selectedMachineId) return alert("Először válassz gépet a várakozóhoz.")
-
-    const selectedMachine = machines.find((m) => m.id === selectedMachineId)
-    if (!selectedMachine) return alert("A kiválasztott gép nem található.")
-    if (!request.name?.trim()) return alert("A várakozó neve hiányzik.")
-    if (!request.requested_start_date || !request.requested_duration_days) {
-      return alert("Hiányzik az igény kezdete vagy az időtartam.")
-    }
-
-    setAssigningRequestId(request.id)
-
-    try {
-      const customerPayload = {
-        name: request.name.trim(),
-        phone: request.phone?.trim() || null,
-        email: request.email?.trim() || null,
-        city: request.city?.trim() || null,
-        address: request.address?.trim() || null,
-        notes: request.notes?.trim() || null,
-      }
-
-      const customerInsert = await supabase.from("customers").insert([customerPayload]).select().single()
-      if (customerInsert.error || !customerInsert.data) {
-        throw customerInsert.error || new Error("Nem sikerült létrehozni a bérlőt.")
-      }
-
-      const newCustomer = customerInsert.data
-      const start = parseLocalDate(request.requested_start_date)
-      const end = new Date(start)
-      end.setDate(end.getDate() + Number(request.requested_duration_days))
-      const endDate = formatDateToYMD(end)
-
-      const rentalPayload = {
-        machine_id: selectedMachineId,
-        customer_id: newCustomer.id,
-        start_date: request.requested_start_date,
-        end_date: endDate,
-        berleti_dij: 0,
-        fizetett_osszeg: 0,
-        tartozas: 0,
-        visszaszallitas_modja: "Én megyek érte",
-        status: "Aktív",
-        note: request.notes?.trim() || null,
-      }
-
-      const rentalInsert = await supabase.from("rentals").insert([rentalPayload]).select()
-      if (rentalInsert.error) throw rentalInsert.error
-
-      const machinePayload = {
-        status: "Kiadva",
-        current_customer: newCustomer.name,
-        rental_start: request.requested_start_date,
-        rental_end: endDate,
-        location: newCustomer.city || selectedMachine.location,
-      }
-
-      const machineUpdate = await supabase.from("machines").update(machinePayload).eq("id", selectedMachineId).select()
-      if (machineUpdate.error) throw machineUpdate.error
-
-      const requestUpdate = await supabase
-        .from("requests")
-        .update({ status: "aktív", assigned_machine_id: selectedMachineId })
-        .eq("id", request.id)
-      if (requestUpdate.error) throw requestUpdate.error
-
-      await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests(), fetchRentals()])
-      alert("A várakozóból sikeresen aktív bérlő lett.")
-    } catch (error: any) {
-      console.error("Hiba gépre adás közben:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült a várakozót gépre adni."))
-    } finally {
-      setAssigningRequestId(null)
-    }
-  }
-
-  async function handleReserveRequestToMachine(request: RequestItem) {
-    const selectedMachineId = requestMachineSelections[request.id]
-    if (!selectedMachineId) return alert("Először válassz gépet a várakozóhoz.")
-
-    const selectedMachine = machines.find((m) => m.id === selectedMachineId)
-    if (!selectedMachine) return alert("A kiválasztott gép nem található.")
-    if (!isMachineReservableForNext(selectedMachine)) return alert("Erre a gépre most nem lehet előfoglalást tenni.")
-
-    setReservingRequestId(request.id)
-
-    try {
-      const requestUpdate = await supabase
-        .from("requests")
-        .update({ status: "lefoglalva", assigned_machine_id: selectedMachineId })
-        .eq("id", request.id)
-      if (requestUpdate.error) throw requestUpdate.error
-
-      if (isMachineImmediatelyAssignable(selectedMachine)) {
-        const machineUpdate = await supabase.from("machines").update({ status: "Lefoglalt" }).eq("id", selectedMachineId)
-        if (machineUpdate.error) throw machineUpdate.error
-      }
-
-      await Promise.all([fetchMachines(), fetchRequests()])
-      alert("A várakozó sikeresen lefoglalva a kiválasztott gépre.")
-    } catch (error: any) {
-      console.error("Hiba előfoglalás közben:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült lefoglalni a várakozót."))
-    } finally {
-      setReservingRequestId(null)
-    }
-  }
-
-  async function handleUpdateRentalEnd(machine: Machine) {
-    const newEndDate = rentalEndSelections[machine.id] || machine.rental_end
-    if (!newEndDate) return alert("Adj meg új lejárati dátumot.")
-    if (!machine.current_customer) return alert("Ehhez a géphez nincs aktív bérlő.")
-    if (machine.rental_start && newEndDate < machine.rental_start) {
-      return alert("Az új lejárat nem lehet korábbi, mint a kezdő dátum.")
-    }
-
-    setUpdatingRentalId(machine.id)
-
-    try {
-      const activeRentalQuery = await supabase
-        .from("rentals")
-        .select("id")
-        .eq("machine_id", machine.id)
-        .eq("status", "Aktív")
-        .order("start_date", { ascending: false })
-        .limit(1)
-      if (activeRentalQuery.error) throw activeRentalQuery.error
-
-      const activeRental = activeRentalQuery.data?.[0]
-      if (!activeRental?.id) throw new Error("Nem található aktív bérlés ehhez a géphez.")
-
-      const rentalUpdate = await supabase.from("rentals").update({ end_date: newEndDate }).eq("id", activeRental.id)
-      if (rentalUpdate.error) throw rentalUpdate.error
-
-      const machineUpdate = await supabase.from("machines").update({ rental_end: newEndDate }).eq("id", machine.id)
-      if (machineUpdate.error) throw machineUpdate.error
-
-      setRentalEndSelections((prev) => ({ ...prev, [machine.id]: newEndDate }))
-      await fetchMachines()
-      alert("A bérlés lejárata sikeresen módosítva.")
-    } catch (error: any) {
-      console.error("Hiba lejárat módosítása közben:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült módosítani a bérlés lejáratát."))
-    } finally {
-      setUpdatingRentalId(null)
-    }
-  }
-
-  async function handleSaveRentalDetails(machine: Machine) {
-    const activeRental = activeRentalByMachineId[machine.id]
-    if (!activeRental?.id) return alert("Ehhez a géphez nincs aktív bérlés.")
-
-    const rawDebtValue =
-      rentalDebtSelections[machine.id] !== undefined
-        ? rentalDebtSelections[machine.id]
-        : String(activeRental.tartozas ?? 0)
-
-    const parsedDebt = Number(rawDebtValue)
-    if (Number.isNaN(parsedDebt) || parsedDebt < 0) {
-      return alert("A tartozás csak 0 vagy pozitív szám lehet.")
-    }
-
-    const selectedReturnMode =
-      rentalReturnModeSelections[machine.id] ??
-      activeRental.visszaszallitas_modja ??
-      "Én megyek érte"
-
-    const updatePayload: {
-      tartozas: number
-      visszaszallitas_modja: string
-      fizetett_osszeg?: number
-    } = {
-      tartozas: parsedDebt,
-      visszaszallitas_modja: selectedReturnMode,
-    }
-
-    if (typeof activeRental.berleti_dij === "number") {
-      updatePayload.fizetett_osszeg = Math.max(activeRental.berleti_dij - parsedDebt, 0)
-    }
-
-    setSavingRentalDetailsId(machine.id)
-
-    try {
-      const { error } = await supabase.from("rentals").update(updatePayload).eq("id", activeRental.id)
-      if (error) throw error
-      await fetchRentals()
-      alert("A bérlés tartozása és visszaszállítása sikeresen frissítve.")
-    } catch (error: any) {
-      console.error("Hiba a bérlés adatainak frissítésekor:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült frissíteni a bérlés tartozását és visszaszállítását."))
-    } finally {
-      setSavingRentalDetailsId(null)
-    }
-  }
-
-  async function handleUpdateMachineStatus(machineId: string) {
-    const selectedStatus = machineStatusSelections[machineId]
-    if (!selectedStatus) return alert("Válassz új státuszt.")
-
-    setUpdatingMachineId(machineId)
-
-    try {
-      const updatePayload: {
-        status: string
-        current_customer?: string | null
-        rental_start?: string | null
-        rental_end?: string | null
-      } = { status: selectedStatus }
-
-      if (selectedStatus !== "Kiadva" && selectedStatus !== "Lefoglalt") {
-        updatePayload.current_customer = null
-        updatePayload.rental_start = null
-        updatePayload.rental_end = null
-      }
-
-      const { error } = await supabase.from("machines").update(updatePayload).eq("id", machineId)
-      if (error) throw error
-
-      await fetchMachines()
-      alert("Gép státusza frissítve.")
-    } catch (error: any) {
-      console.error("Hiba gép státusz frissítése közben:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült frissíteni a gép státuszát."))
-    } finally {
-      setUpdatingMachineId(null)
-    }
-  }
-
-  async function handleReturnMachine(machine: Machine) {
-    const confirmed = window.confirm(`Biztosan leveszed a bérlőt erről a gépről: ${machine.name || "ismeretlen gép"}?`)
-    if (!confirmed) return
-
-    setUpdatingMachineId(machine.id)
-
-    try {
-      const activeRentalQuery = await supabase
-        .from("rentals")
-        .select("id")
-        .eq("machine_id", machine.id)
-        .eq("status", "Aktív")
-        .order("start_date", { ascending: false })
-        .limit(1)
-      if (activeRentalQuery.error) throw activeRentalQuery.error
-
-      const activeRental = activeRentalQuery.data?.[0]
-      if (activeRental?.id) {
-        const rentalUpdate = await supabase.from("rentals").update({ status: "Lezárt" }).eq("id", activeRental.id)
-        if (rentalUpdate.error) throw rentalUpdate.error
-      }
-
-      const machineUpdate = await supabase
-        .from("machines")
-        .update({ status: "Szabad", current_customer: null, rental_start: null, rental_end: null })
-        .eq("id", machine.id)
-      if (machineUpdate.error) throw machineUpdate.error
-
-      await Promise.all([fetchMachines(), fetchRequests(), fetchRentals()])
-      alert("A gépről sikeresen lekerült a bérlő.")
-    } catch (error: any) {
-      console.error("Hiba visszavétel közben:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült a gép visszavétele."))
-    } finally {
-      setUpdatingMachineId(null)
-    }
-  }
-
-  async function handleRemoveActiveCustomer(row: ActiveCustomerRow) {
-    const confirmed = window.confirm(`Biztosan eltávolítod ezt a bérlőt a rendszerből: ${row.customer.name || "ismeretlen bérlő"}?`)
-    if (!confirmed) return
-
-    setRemovingCustomerId(row.customer.id)
-
-    try {
-      const activeRentalQuery = await supabase
-        .from("rentals")
-        .select("id")
-        .eq("machine_id", row.machine.id)
-        .eq("customer_id", row.customer.id)
-        .eq("status", "Aktív")
-        .order("start_date", { ascending: false })
-        .limit(1)
-      if (activeRentalQuery.error) throw activeRentalQuery.error
-
-      const activeRental = activeRentalQuery.data?.[0]
-      if (activeRental?.id) {
-        const rentalUpdate = await supabase.from("rentals").update({ status: "Lezárt" }).eq("id", activeRental.id)
-        if (rentalUpdate.error) throw rentalUpdate.error
-      }
-
-      const machineUpdate = await supabase
-        .from("machines")
-        .update({ status: "Szabad", current_customer: null, rental_start: null, rental_end: null })
-        .eq("id", row.machine.id)
-      if (machineUpdate.error) throw machineUpdate.error
-
-      const customerDelete = await supabase.from("customers").delete().eq("id", row.customer.id)
-      if (customerDelete.error) throw customerDelete.error
-
-      await Promise.all([fetchCustomers(), fetchMachines(), fetchRequests(), fetchRentals()])
-      alert("A bérlő sikeresen eltávolítva.")
-    } catch (error: any) {
-      console.error("Hiba bérlő eltávolítása közben:", error)
-      alert(getSupabaseErrorMessage(error, "Nem sikerült eltávolítani a bérlőt."))
-    } finally {
-      setRemovingCustomerId(null)
-    }
-  }
-
-  // --- MEMO-ZOTT STATISZTIKÁK ÉS SZŰRÉS ---
-  const stats = useMemo(() => {
-    const total = machines.length
-    const rented = machines.filter((m) => isStatus(m, "Kiadva")).length
-    const reserved = machines.filter((m) => isStatus(m, "Lefoglalt")).length
-    const repair = machines.filter((m) => isStatus(m, "Javítás alatt")).length
-    const activeFleet = total - repair
-    const occupied = rented + reserved
-    const utilization = activeFleet > 0 ? Math.round((occupied / activeFleet) * 100) : 0
+      );
+    }, 0);
+
+    const revenue = machineRentals.reduce((sum, rental) => {
+      const overlap = overlapDays(
+        new Date(rental.start_date),
+        new Date(rental.end_date),
+        range.start,
+        range.end
+      );
+
+      const fullRentalDays = overlapDays(
+        new Date(rental.start_date),
+        new Date(rental.end_date),
+        new Date(rental.start_date),
+        new Date(rental.end_date)
+      );
+
+      if (fullRentalDays === 0) return sum;
+      return sum + (rental.berleti_dij / fullRentalDays) * overlap;
+    }, 0);
+
+    const utilization = range.daysInMonth === 0 ? 0 : (rentedDays / range.daysInMonth) * 100;
 
     return {
-      total,
-      rented,
-      reserved,
-      activeFleet,
-      occupied,
-      free: machines.filter((m) => isStatus(m, "Szabad")).length,
-      reserve: machines.filter((m) => isStatus(m, "Tartalék")).length,
-      repair,
-      expiringSoon: machines.filter((m) => {
-        const d = getDaysUntil(m.rental_end)
-        return d !== null && d >= 0 && d <= 5 && isStatus(m, "Kiadva")
-      }).length,
-      expired: machines.filter((m) => {
-        const d = getDaysUntil(m.rental_end)
-        return d !== null && d < 0 && isStatus(m, "Kiadva")
-      }).length,
+      machineId: machine.id,
+      machineName: machine.name,
+      rentedDays,
+      daysInMonth: range.daysInMonth,
       utilization,
-      recommendation:
-        utilization >= 90
-          ? "Új gép beszerzés indokolt"
-          : utilization >= 80
-          ? "Figyelni kell a kapacitásra"
-          : "Stabil kapacitás",
-    }
-  }, [machines])
+      revenue: Math.round(revenue),
+    };
+  });
+}
 
-  const filteredMachines = useMemo(() => {
-    if (filter === "összes") return machines
-    if (filter === "foglalt") {
-      return machines.filter((m) => isStatus(m, "Kiadva") || isStatus(m, "Lefoglalt"))
-    }
-    if (filter === "szabad") return machines.filter((m) => isStatus(m, "Szabad"))
-    if (filter === "tartalék") return machines.filter((m) => isStatus(m, "Tartalék"))
-    if (filter === "javítás") return machines.filter((m) => isStatus(m, "Javítás alatt"))
-    if (filter === "lejáró") {
-      return machines.filter((m) => {
-        const d = getDaysUntil(m.rental_end)
-        return d !== null && d >= 0 && d <= 5 && isStatus(m, "Kiadva")
-      })
-    }
-    if (filter === "lejárt") {
-      return machines.filter((m) => {
-        const d = getDaysUntil(m.rental_end)
-        return d !== null && d < 0 && isStatus(m, "Kiadva")
-      })
-    }
-    return machines
-  }, [machines, filter])
+function getFleetUtilization(rows: UtilizationRow[]) {
+  if (rows.length === 0) return 0;
+  const totalPossible = rows.reduce((sum, row) => sum + row.daysInMonth, 0);
+  const totalUsed = rows.reduce((sum, row) => sum + row.rentedDays, 0);
+  if (totalPossible === 0) return 0;
+  return (totalUsed / totalPossible) * 100;
+}
 
-  const rentableMachines = useMemo(() => machines.filter((m) => isMachineImmediatelyAssignable(m)), [machines])
-  const reservableMachines = useMemo(() => machines.filter((m) => isMachineReservableForNext(m)), [machines])
-  const activeRentals = useMemo(() => rentals.filter((r) => (r.status || "").toLowerCase() === "aktív"), [rentals])
-
-  const activeRentalByMachineId = useMemo(() => {
-    const map: Record<string, Rental> = {}
-    for (const rental of activeRentals) {
-      if (rental.machine_id && !map[rental.machine_id]) {
-        map[rental.machine_id] = rental
-      }
-    }
-    return map
-  }, [activeRentals])
-
-  const reservedRequests = useMemo(
-    () => requests.filter((r) => r.assigned_machine_id && ["lefoglalva", "párosítva"].includes((r.status || "").toLowerCase())),
-    [requests]
-  )
-
-  const nextReservedRequestByMachineId = useMemo(() => {
-    const map: Record<string, RequestItem> = {}
-    for (const request of reservedRequests) {
-      if (request.assigned_machine_id && !map[request.assigned_machine_id]) {
-        map[request.assigned_machine_id] = request
-      }
-    }
-    return map
-  }, [reservedRequests])
-
-  const soonExpiringIssuedMachines = useMemo(
-    () =>
-      machines.filter((machine) => {
-        const days = getDaysUntil(machine.rental_end)
-        return isStatus(machine, "Kiadva") && days !== null && days >= 0 && days <= 4
-      }),
-    [machines]
-  )
-
-  const activeCustomerRows = useMemo<ActiveCustomerRow[]>(() => {
-    const rows: ActiveCustomerRow[] = []
-    for (const rental of activeRentals) {
-      if (!rental.machine_id || !rental.customer_id) continue
-      const machine = machines.find((item) => item.id === rental.machine_id)
-      const customer = customers.find((item) => item.id === rental.customer_id)
-      if (machine && customer) rows.push({ customer, machine, rental })
-    }
-    return rows
-  }, [activeRentals, customers, machines])
-
-  const getRowStyle = (m: Machine) => {
-    const d = getDaysUntil(m.rental_end)
-    if (isStatus(m, "Kiadva") && d !== null && d < 0) return { backgroundColor: "#ffd6d6" }
-    if (isStatus(m, "Kiadva") && d !== null && d <= 5) return { backgroundColor: "#fff3cd" }
-    if (isStatus(m, "Szabad")) return { backgroundColor: "#d9f8e5" }
-    return { backgroundColor: "#ffffff" }
+function getRecommendation(currentUtilization: number, previousUtilization: number, waitingCount: number) {
+  if (currentUtilization > 92) {
+    return {
+      level: "critical",
+      title: "Sürgős kapacitásbővítés",
+      text: "A flotta kihasználtsága extrém magas. Indíts új gépbeszerzést minél előbb.",
+    };
   }
 
-  if (loading) {
-    return (
-      <main style={{ padding: "32px", fontFamily: "sans-serif", background: "#f7f8fa", minHeight: "100vh" }}>
-        <h2 style={{ marginTop: 0 }}>Betöltés...</h2>
-        <p style={{ color: "#555" }}>Adatok szinkronizálása folyamatban.</p>
-      </main>
-    )
+  if (currentUtilization > 89 && previousUtilization > 89) {
+    return {
+      level: "success",
+      title: "Új gép ajánlott",
+      text: "A kihasználtság 2 egymást követő hónapban 89% felett van. Ez már beszerzési trigger.",
+    };
   }
+
+  if (currentUtilization >= 85 || waitingCount > 0) {
+    return {
+      level: "warning",
+      title: "Kapacitásfigyelés szükséges",
+      text: "A kihasználtság emelkedik vagy van várólista. Figyeld a következő heteket és a hosszabbításokat.",
+    };
+  }
+
+  return {
+    level: "info",
+    title: "Stabil kapacitás",
+    text: "A jelenlegi flotta még kezelhető terhelésen fut. Nincs azonnali beszerzési nyomás.",
+  };
+}
+
+export default function DashboardPage() {
+  // TODO: Ezt a blokkot cseréld Supabase lekérésre.
+  const machines: Machine[] = [
+    { id: "m1", name: "CPM01", type: "Knee CPM", status: "rented", location: "Miskolc" },
+    { id: "m2", name: "CPM02", type: "Knee CPM", status: "rented", location: "Debrecen" },
+    { id: "m3", name: "CPM03", type: "Knee CPM", status: "available", location: "Raktár" },
+    { id: "m4", name: "CPM04", type: "Knee CPM", status: "rented", location: "Budapest" },
+    { id: "m5", name: "CPM05", type: "Knee CPM", status: "service", location: "Szerviz" },
+  ];
+
+  const customers: Customer[] = [
+    { id: "c1", name: "Kiss Anna", city: "Miskolc", phone: "+36 30 111 1111" },
+    { id: "c2", name: "Tóth Béla", city: "Debrecen", phone: "+36 30 222 2222" },
+    { id: "c3", name: "Szabó Gábor", city: "Budapest", phone: "+36 30 333 3333" },
+  ];
+
+  const rentals: Rental[] = [
+    {
+      id: "r1",
+      machine_id: "m1",
+      customer_id: "c1",
+      start_date: "2026-03-01",
+      end_date: "2026-03-21",
+      status: "active",
+      berleti_dij: 90000,
+      fizetett_osszeg: 60000,
+      tartozas: 30000,
+      note: "Hosszabbítás várható",
+    },
+    {
+      id: "r2",
+      machine_id: "m2",
+      customer_id: "c2",
+      start_date: "2026-03-03",
+      end_date: "2026-03-25",
+      status: "active",
+      berleti_dij: 98000,
+      fizetett_osszeg: 98000,
+      tartozas: 0,
+    },
+    {
+      id: "r3",
+      machine_id: "m4",
+      customer_id: "c3",
+      start_date: "2026-03-10",
+      end_date: "2026-03-18",
+      status: "active",
+      berleti_dij: 56000,
+      fizetett_osszeg: 30000,
+      tartozas: 26000,
+    },
+    {
+      id: "r4",
+      machine_id: "m3",
+      customer_id: "c1",
+      start_date: "2026-02-01",
+      end_date: "2026-02-27",
+      status: "finished",
+      berleti_dij: 110000,
+      fizetett_osszeg: 110000,
+      tartozas: 0,
+    },
+  ];
+
+  const requests: RequestItem[] = [
+    {
+      id: "q1",
+      name: "Nagy István",
+      city: "Nyíregyháza",
+      phone: "+36 30 444 4444",
+      status: "waiting",
+      priority: 1,
+      requested_start_date: "2026-03-17",
+    },
+    {
+      id: "q2",
+      name: "Fodor Zsuzsa",
+      city: "Eger",
+      phone: "+36 30 555 5555",
+      status: "waiting",
+      priority: 2,
+      requested_start_date: "2026-03-20",
+    },
+  ];
+
+  const now = new Date();
+  const currentMonth = getMonthRange(now);
+  const previousMonth = getPreviousMonthRange(now);
+
+  const activeRentals = rentals.filter((r) => r.status === "active");
+  const rentedMachinesCount = machines.filter((m) => m.status === "rented").length;
+  const availableMachinesCount = machines.filter((m) => m.status === "available").length;
+  const serviceMachinesCount = machines.filter((m) => m.status === "service").length;
+  const waitingRequests = requests.filter((r) => r.status === "waiting");
+
+  const monthlyRevenue = rentals
+    .filter((r) => {
+      const start = new Date(r.start_date);
+      const end = new Date(r.end_date);
+      return end >= currentMonth.start && start <= currentMonth.end;
+    })
+    .reduce((sum, rental) => sum + rental.berleti_dij, 0);
+
+  const totalDebt = rentals.reduce((sum, rental) => sum + rental.tartozas, 0);
+
+  const expiringRentals = activeRentals
+    .map((rental) => ({
+      ...rental,
+      daysLeft: diffInDays(now, new Date(rental.end_date)),
+      machine: machines.find((m) => m.id === rental.machine_id),
+      customer: customers.find((c) => c.id === rental.customer_id),
+    }))
+    .filter((rental) => rental.daysLeft <= 7)
+    .sort((a, b) => a.daysLeft - b.daysLeft);
+
+  const currentUtilizationRows = buildUtilizationRows(machines, rentals, currentMonth).sort(
+    (a, b) => b.utilization - a.utilization
+  );
+  const previousUtilizationRows = buildUtilizationRows(machines, rentals, previousMonth);
+
+  const fleetUtilization = getFleetUtilization(currentUtilizationRows);
+  const previousFleetUtilization = getFleetUtilization(previousUtilizationRows);
+  const averageRentalDays =
+    rentals.length === 0
+      ? 0
+      : Math.round(
+          rentals.reduce((sum, rental) => {
+            return (
+              sum +
+              overlapDays(
+                new Date(rental.start_date),
+                new Date(rental.end_date),
+                new Date(rental.start_date),
+                new Date(rental.end_date)
+              )
+            );
+          }, 0) / rentals.length
+        );
+
+  const topUtilization = currentUtilizationRows.slice(0, 5);
+  const lowUtilization = currentUtilizationRows.filter((row) => row.utilization < 40);
+
+  const recommendation = getRecommendation(
+    fleetUtilization,
+    previousFleetUtilization,
+    waitingRequests.length
+  );
+
+  const recommendationStyles: Record<string, string> = {
+    critical: "border-red-200 bg-red-50 text-red-900",
+    success: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    warning: "border-amber-200 bg-amber-50 text-amber-900",
+    info: "border-slate-200 bg-slate-50 text-slate-900",
+  };
+
+  const quickLinks = [
+    { href: "/machines", label: "Gépek" },
+    { href: "/customers", label: "Ügyfelek" },
+    { href: "/rentals", label: "Bérlések" },
+    { href: "/requests", label: "Várólista" },
+  ];
 
   return (
-    <main style={{ padding: "32px", fontFamily: "sans-serif", background: "#f7f8fa", minHeight: "100vh" }}>
-      <header
-        style={{
-          marginBottom: "24px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          gap: "16px",
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: "32px", margin: 0 }}>CPM Rent Admin</h1>
-          <p style={{ color: "#555" }}>Flottakezelő dashboard</p>
+    <main className="min-h-screen bg-slate-50 p-4 md:p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex flex-col gap-4 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-medium uppercase tracking-wide text-slate-500">CPM admin</p>
+            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              Operatív kontroll, pénzügyi rálátás és kapacitásfigyelés egy nézetben.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {quickLinks.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
+              >
+                {link.label}
+              </Link>
+            ))}
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-          <Link
-            href="/mobile"
-            style={{
-              padding: "10px 20px",
-              background: "#2563eb",
-              color: "#fff",
-              borderRadius: "8px",
-              textDecoration: "none",
-              fontWeight: "bold",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            Mobil nézet
-          </Link>
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+          <KpiCard title="Havi bevétel" value={formatCurrency(monthlyRevenue)} subtitle="aktuális hónap" />
+          <KpiCard title="Aktív gépek" value={`${machines.length} db`} subtitle="teljes flotta" />
+          <KpiCard title="Kint lévő gépek" value={`${rentedMachinesCount} db`} subtitle="épp bérbe adva" />
+          <KpiCard title="Szabad gépek" value={`${availableMachinesCount} db`} subtitle="azonnal kiadható" />
+          <KpiCard title="Várakozó ügyfelek" value={`${waitingRequests.length} db`} subtitle="gépre várnak" />
+          <KpiCard title="Lejárók 7 napon belül" value={`${expiringRentals.length} db`} subtitle="utánkövetés kell" />
+        </section>
 
-          <button onClick={logout} style={primaryButtonStyle}>
-            Kijelentkezés
-          </button>
-        </div>
-      </header>
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+          <div className="xl:col-span-2 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Kapacitás és üzleti ajánlás</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Beszerzési trigger, terhelés és flotta trend összefoglaló.
+                </p>
+              </div>
+              <div className="rounded-2xl bg-slate-100 px-3 py-2 text-right">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Flotta kihasználtság</div>
+                <div className="text-2xl font-bold text-slate-900">{fleetUtilization.toFixed(1)}%</div>
+              </div>
+            </div>
+
+            <div className={cn("mt-6 rounded-3xl border p-5", recommendationStyles[recommendation.level])}>
+              <div className="text-sm font-semibold uppercase tracking-wide">Ajánlás</div>
+              <h3 className="mt-1 text-xl font-bold">{recommendation.title}</h3>
+              <p className="mt-2 text-sm leading-6">{recommendation.text}</p>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <MiniMetric label="Előző havi kihasználtság" value={`${previousFleetUtilization.toFixed(1)}%`} />
+                <MiniMetric label="Szervizben" value={`${serviceMachinesCount} db`} />
+                <MiniMetric label="Átlag bérlési idő" value={`${averageRentalDays} nap`} />
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <InfoTile
+                title="Kintlévőség"
+                value={formatCurrency(totalDebt)}
+                hint="összes nyitott tartozás"
+              />
+              <InfoTile
+                title="Új gép trigger"
+                value={fleetUtilization > 89 && previousFleetUtilization > 89 ? "AKTÍV" : "NINCS"}
+                hint="89% felett 2 hónapig"
+              />
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <h2 className="text-lg font-bold text-slate-900">Gyors navigáció</h2>
+            <p className="mt-1 text-sm text-slate-500">Innen nyílnak a részletes oldalak.</p>
+            <div className="mt-5 space-y-3">
+              {quickLinks.map((link) => (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <span>{link.label}</span>
+                  <span>→</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Hamarosan lejáró bérlések</h2>
+                <p className="mt-1 text-sm text-slate-500">A következő 7 nap operatív fókusza.</p>
+              </div>
+              <Link href="/rentals" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
+                Összes bérlés
+              </Link>
+            </div>
+
+            <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <TableHead>Ügyfél</TableHead>
+                    <TableHead>Gép</TableHead>
+                    <TableHead>Lejárat</TableHead>
+                    <TableHead>Hátralévő nap</TableHead>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {expiringRentals.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-6 text-center text-slate-500">
+                        Nincs 7 napon belül lejáró bérlés.
+                      </td>
+                    </tr>
+                  ) : (
+                    expiringRentals.map((rental) => (
+                      <tr key={rental.id}>
+                        <TableCell>{rental.customer?.name ?? "-"}</TableCell>
+                        <TableCell>{rental.machine?.name ?? "-"}</TableCell>
+                        <TableCell>{formatDate(rental.end_date)}</TableCell>
+                        <TableCell>
+                          <span
+                            className={cn(
+                              "rounded-full px-2.5 py-1 text-xs font-semibold",
+                              rental.daysLeft <= 2
+                                ? "bg-red-100 text-red-700"
+                                : "bg-amber-100 text-amber-700"
+                            )}
+                          >
+                            {rental.daysLeft} nap
+                          </span>
+                        </TableCell>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Várakozó ügyfelek</h2>
+                <p className="mt-1 text-sm text-slate-500">Azonnali sales és operatív pipeline.</p>
+              </div>
+              <Link href="/requests" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
+                Összes igény
+              </Link>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {waitingRequests.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 px-4 py-6 text-center text-sm text-slate-500">
+                  Nincs várakozó ügyfél.
+                </div>
+              ) : (
+                waitingRequests.map((request) => (
+                  <div key={request.id} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{request.name}</div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {request.city ?? "-"} · {request.phone ?? "-"}
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        Prioritás: {request.priority ?? "-"}
+                      </span>
+                    </div>
+                    <div className="mt-3 text-sm text-slate-600">
+                      Igényelt kezdés: {request.requested_start_date ? formatDate(request.requested_start_date) : "-"}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Gép kihasználtság</h2>
+                <p className="mt-1 text-sm text-slate-500">Havi termelés és kapacitás gépenként.</p>
+              </div>
+              <div className="text-sm font-semibold text-slate-600">Top futó gépek</div>
+            </div>
+
+            <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <TableHead>Gép</TableHead>
+                    <TableHead>Kihasználtság</TableHead>
+                    <TableHead>Kint nap</TableHead>
+                    <TableHead>Bevétel</TableHead>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {topUtilization.map((row) => (
+                    <tr key={row.machineId}>
+                      <TableCell>{row.machineName}</TableCell>
+                      <TableCell>
+                        <span
+                          className={cn(
+                            "rounded-full px-2.5 py-1 text-xs font-semibold",
+                            row.utilization >= 89
+                              ? "bg-emerald-100 text-emerald-700"
+                              : row.utilization >= 60
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-700"
+                          )}
+                        >
+                          {row.utilization.toFixed(1)}%
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {row.rentedDays}/{row.daysInMonth}
+                      </TableCell>
+                      <TableCell>{formatCurrency(row.revenue)}</TableCell>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <h2 className="text-lg font-bold text-slate-900">Alacsony kihasználtságú gépek</h2>
+            <p className="mt-1 text-sm text-slate-500">Ezeknél lokációt, állapotot vagy pricingot érdemes átnézni.</p>
+
+            <div className="mt-5 space-y-3">
+              {lowUtilization.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 px-4 py-6 text-center text-sm text-slate-500">
+                  Nincs 40% alatti gép ebben a hónapban.
+                </div>
+              ) : (
+                lowUtilization.map((row) => (
+                  <div key={row.machineId} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">{row.machineName}</div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {row.rentedDays}/{row.daysInMonth} nap használat
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        {row.utilization.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
-  )
+  );
 }
 
-function StatCard({
-  title,
-  value,
-  color = "#111",
-}: {
-  title: string
-  value: React.ReactNode
-  color?: string
-}) {
+function KpiCard({ title, value, subtitle }: { title: string; value: string; subtitle: string }) {
   return (
-    <div
-      style={{
-        background: "#fff",
-        padding: "16px",
-        borderRadius: "12px",
-        boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
-      }}
-    >
-      <div style={{ fontSize: "13px", color: "#666" }}>{title}</div>
-      <div style={{ fontSize: "24px", fontWeight: "bold", color }}>{value}</div>
+    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="text-sm font-medium text-slate-500">{title}</div>
+      <div className="mt-3 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
+      <div className="mt-2 text-sm text-slate-500">{subtitle}</div>
     </div>
-  )
+  );
 }
 
-const cardStyle = {
-  background: "#fff",
-  borderRadius: "16px",
-  padding: "20px",
-  marginBottom: "16px",
-  boxShadow: "0 2px 10px rgba(0,0,0,0.06)",
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-white/70 px-4 py-3 ring-1 ring-black/5">
+      <div className="text-xs uppercase tracking-wide opacity-70">{label}</div>
+      <div className="mt-1 text-lg font-bold">{value}</div>
+    </div>
+  );
 }
 
-const inputStyle = {
-  padding: "10px",
-  borderRadius: "8px",
-  border: "1px solid #ddd",
-  fontSize: "14px",
-  width: "100%",
+function InfoTile({ title, value, hint }: { title: string; value: string; hint: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 p-4">
+      <div className="text-sm font-medium text-slate-500">{title}</div>
+      <div className="mt-2 text-2xl font-bold text-slate-900">{value}</div>
+      <div className="mt-1 text-sm text-slate-500">{hint}</div>
+    </div>
+  );
 }
 
-const formGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-  gap: "10px",
-  marginBottom: "12px",
+function TableHead({ children }: { children: React.ReactNode }) {
+  return <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">{children}</th>;
 }
 
-const primaryButtonStyle = {
-  padding: "10px 20px",
-  background: "#111",
-  color: "#fff",
-  border: "none",
-  borderRadius: "8px",
-  cursor: "pointer",
-  fontWeight: "bold",
-}
-
-const secondaryButtonStyle = {
-  padding: "10px",
-  background: "#eee",
-  border: "1px solid #ccc",
-  borderRadius: "8px",
-  cursor: "pointer",
-}
-
-const toggleButtonStyle = {
-  background: "none",
-  border: "none",
-  cursor: "pointer",
-  fontWeight: "bold",
-  fontSize: "16px",
-  display: "flex",
-  alignItems: "center",
-  gap: "8px",
-}
-
-const cellStyle = {
-  padding: "12px",
-  borderBottom: "1px solid #eee",
-  textAlign: "left" as const,
-}
-
-const statsGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-  gap: "16px",
-  marginBottom: "24px",
-}
-
-const filterButtonStyle = {
-  padding: "8px 16px",
-  borderRadius: "20px",
-  border: "1px solid #ddd",
-  cursor: "pointer",
-  fontWeight: "600",
-  fontSize: "13px",
-}
-
-const innerFormStyle = {
-  gridColumn: "1 / -1",
-  background: "#f9f9f9",
-  padding: "15px",
-  borderRadius: "10px",
-  border: "1px dashed #ccc",
-}
-
-const msgStyle = {
-  marginLeft: "15px",
-  fontSize: "14px",
-  fontWeight: "bold",
+function TableCell({ children }: { children: React.ReactNode }) {
+  return <td className="px-4 py-3 text-slate-700">{children}</td>;
 }
