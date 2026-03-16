@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState, type ReactNode } from "react";
 
 type RentalStatus = "active" | "finished" | "waiting" | "cancelled";
 type MachineStatus = "available" | "rented" | "service";
