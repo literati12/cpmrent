@@ -1,0 +1,459 @@
+"use client";
+
+import Link from "next/link";
+import { useMemo, useState } from "react";
+
+type MachineStatus = "available" | "rented" | "reserved" | "faulty" | "repair";
+
+type Machine = {
+  id: string;
+  machine_code: string;
+  name: string;
+  type: string;
+  status: MachineStatus;
+  location: string;
+  notes?: string;
+  customerName?: string | null;
+  rentalEndDate?: string | null;
+};
+
+type MachineForm = {
+  machine_code: string;
+  name: string;
+  type: string;
+  status: MachineStatus;
+  location: string;
+  notes: string;
+};
+
+const statusConfig: Record<
+  MachineStatus,
+  { label: string; className: string }
+> = {
+  available: {
+    label: "Szabad",
+    className: "bg-emerald-100 text-emerald-700 ring-emerald-200",
+  },
+  rented: {
+    label: "Kiadva",
+    className: "bg-sky-100 text-sky-700 ring-sky-200",
+  },
+  reserved: {
+    label: "Lefoglalt",
+    className: "bg-amber-100 text-amber-700 ring-amber-200",
+  },
+  faulty: {
+    label: "Hibás",
+    className: "bg-red-100 text-red-700 ring-red-200",
+  },
+  repair: {
+    label: "Javítás alatt",
+    className: "bg-slate-200 text-slate-700 ring-slate-300",
+  },
+};
+
+const initialMachines: Machine[] = [
+  { id: "1", machine_code: "CPM01", name: "Kinetec Spectra", type: "Térd CPM", status: "rented", location: "Miskolc", notes: "Aktív bérlés", customerName: "Kiss Anna", rentalEndDate: "2026-03-19" },
+  { id: "2", machine_code: "CPM02", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Raktár", notes: "Azonnal kiadható" },
+  { id: "3", machine_code: "CPM03", name: "Kinetec Spectra", type: "Térd CPM", status: "reserved", location: "Debrecen", notes: "Holnapi kiadás", rentalEndDate: "2026-03-20" },
+  { id: "4", machine_code: "CPM04", name: "Kinetec Spectra", type: "Térd CPM", status: "repair", location: "Szerviz", notes: "Motor ellenőrzés" },
+  { id: "5", machine_code: "CPM05", name: "Kinetec Spectra", type: "Térd CPM", status: "faulty", location: "Nyíregyháza", notes: "Tápkábel hiba" },
+  { id: "6", machine_code: "CPM06", name: "Kinetec Spectra", type: "Térd CPM", status: "rented", location: "Budapest", notes: "Hosszabbítás esélyes", customerName: "Tóth Béla", rentalEndDate: "2026-03-17" },
+  { id: "7", machine_code: "CPM07", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Raktár", notes: "Tisztítva" },
+  { id: "8", machine_code: "CPM08", name: "Kinetec Spectra", type: "Térd CPM", status: "rented", location: "Kazincbarcika", notes: "Kint ügyfélnél", customerName: "Szabó Gábor", rentalEndDate: "2026-03-22" },
+  { id: "9", machine_code: "CPM09", name: "Kinetec Spectra", type: "Térd CPM", status: "reserved", location: "Eger", notes: "Műtét utáni foglalás" },
+  { id: "10", machine_code: "CPM10", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Raktár", notes: "Készenlét" },
+  { id: "11", machine_code: "CPM11", name: "Kinetec Spectra", type: "Térd CPM", status: "repair", location: "Szerviz", notes: "Tesztelés folyamatban" },
+  { id: "12", machine_code: "CPM12", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Miskolc", notes: "Kiadásra vár" },
+  { id: "13", machine_code: "CPM13", name: "Kinetec Spectra", type: "Térd CPM", status: "rented", location: "Szerencs", notes: "Stabil ügyfél", customerName: "Nagy Imre", rentalEndDate: "2026-03-24" },
+  { id: "14", machine_code: "CPM14", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Raktár", notes: "Új huzat" },
+  { id: "15", machine_code: "CPM15", name: "Kinetec Spectra", type: "Térd CPM", status: "faulty", location: "Budapest", notes: "Kijelző hiba" },
+  { id: "16", machine_code: "CPM16", name: "Kinetec Spectra", type: "Térd CPM", status: "reserved", location: "Miskolc", notes: "Már lefoglalva" },
+  { id: "17", machine_code: "CPM17", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Raktár", notes: "Azonnal vihető" },
+  { id: "18", machine_code: "CPM18", name: "Kinetec Spectra", type: "Térd CPM", status: "rented", location: "Nyíregyháza", notes: "Heti kontroll", customerName: "Fodor Zsuzsa", rentalEndDate: "2026-03-18" },
+  { id: "19", machine_code: "CPM19", name: "Kinetec Spectra", type: "Térd CPM", status: "available", location: "Raktár", notes: "Tartalék" },
+  { id: "20", machine_code: "CPM20", name: "Kinetec Spectra", type: "Térd CPM", status: "repair", location: "Szerviz", notes: "Csapágy csere" },
+];
+
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+function formatDate(date: string) {
+  return new Intl.DateTimeFormat("hu-HU").format(new Date(date));
+}
+
+function getExpiryMeta(rentalEndDate?: string | null) {
+  if (!rentalEndDate) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const end = new Date(rentalEndDate);
+  end.setHours(0, 0, 0, 0);
+
+  const diff = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diff < 0) {
+    return {
+      text: `Lejárt ${Math.abs(diff)} napja`,
+      className: "bg-red-100 text-red-700 ring-red-200",
+    };
+  }
+
+  if (diff <= 3) {
+    return {
+      text: `${diff} napon belül lejár`,
+      className: "bg-amber-100 text-amber-700 ring-amber-200",
+    };
+  }
+
+  return {
+    text: `Lejárat: ${formatDate(rentalEndDate)}`,
+    className: "bg-slate-100 text-slate-700 ring-slate-200",
+  };
+}
+
+export default function MachinesPage() {
+  const [machines, setMachines] = useState<Machine[]>(initialMachines);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | MachineStatus>("all");
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [form, setForm] = useState<MachineForm>({
+    machine_code: "",
+    name: "",
+    type: "Térd CPM",
+    status: "available",
+    location: "Raktár",
+    notes: "",
+  });
+  const [formError, setFormError] = useState("");
+
+  const filteredMachines = useMemo(() => {
+    return machines.filter((machine) => {
+      const matchesSearch =
+        machine.machine_code.toLowerCase().includes(search.toLowerCase()) ||
+        machine.name.toLowerCase().includes(search.toLowerCase()) ||
+        machine.location.toLowerCase().includes(search.toLowerCase());
+
+      const matchesStatus = statusFilter === "all" ? true : machine.status === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [machines, search, statusFilter]);
+
+  const summary = useMemo(() => {
+    return {
+      total: machines.length,
+      available: machines.filter((m) => m.status === "available").length,
+      rented: machines.filter((m) => m.status === "rented").length,
+      reserved: machines.filter((m) => m.status === "reserved").length,
+      service: machines.filter((m) => ["faulty", "repair"].includes(m.status)).length,
+    };
+  }, [machines]);
+
+  function updateMachineStatus(machineId: string, nextStatus: MachineStatus) {
+    setMachines((prev) =>
+      prev.map((machine) =>
+        machine.id === machineId ? { ...machine, status: nextStatus } : machine
+      )
+    );
+  }
+
+  function handleAddMachine() {
+    setFormError("");
+
+    if (!form.machine_code.trim() || !form.name.trim()) {
+      setFormError("A gépkód és a gép neve kötelező.");
+      return;
+    }
+
+    const exists = machines.some(
+      (machine) => machine.machine_code.toLowerCase() === form.machine_code.trim().toLowerCase()
+    );
+
+    if (exists) {
+      setFormError("Ez a gépkód már létezik.");
+      return;
+    }
+
+    const newMachine: Machine = {
+      id: crypto.randomUUID(),
+      machine_code: form.machine_code.trim().toUpperCase(),
+      name: form.name.trim(),
+      type: form.type.trim(),
+      status: form.status,
+      location: form.location.trim() || "Raktár",
+      notes: form.notes.trim(),
+    };
+
+    setMachines((prev) => [newMachine, ...prev]);
+    setForm({
+      machine_code: "",
+      name: "",
+      type: "Térd CPM",
+      status: "available",
+      location: "Raktár",
+      notes: "",
+    });
+    setShowAddForm(false);
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-4 md:p-6">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-sm font-medium uppercase tracking-wide text-slate-500">CPM admin</p>
+              <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">Gépek</h1>
+              <p className="mt-2 text-sm text-slate-600">
+                Flottaállapot, státuszkezelés és új gépek felvétele egy helyen.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href="/"
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
+              >
+                Dashboard
+              </Link>
+              <button
+                onClick={() => setShowAddForm((prev) => !prev)}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                + Új gép
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          <StatCard title="Összes gép" value={`${summary.total} db`} />
+          <StatCard title="Szabad" value={`${summary.available} db`} />
+          <StatCard title="Kiadva" value={`${summary.rented} db`} />
+          <StatCard title="Lefoglalt" value={`${summary.reserved} db`} />
+          <StatCard title="Hibás / Javítás" value={`${summary.service} db`} />
+        </section>
+
+        {showAddForm && (
+          <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <div className="mb-5">
+              <h2 className="text-lg font-bold text-slate-900">Új gép hozzáadása</h2>
+              <p className="mt-1 text-sm text-slate-500">Az új eszköz azonnal bekerül a flottába.</p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <Field label="Gépkód">
+                <input
+                  value={form.machine_code}
+                  onChange={(e) => setForm((prev) => ({ ...prev, machine_code: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-400"
+                  placeholder="pl. CPM21"
+                />
+              </Field>
+
+              <Field label="Gép neve">
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-400"
+                  placeholder="pl. Kinetec Spectra"
+                />
+              </Field>
+
+              <Field label="Típus">
+                <input
+                  value={form.type}
+                  onChange={(e) => setForm((prev) => ({ ...prev, type: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-400"
+                />
+              </Field>
+
+              <Field label="Státusz">
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value as MachineStatus }))}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-400"
+                >
+                  {Object.entries(statusConfig).map(([value, config]) => (
+                    <option key={value} value={value}>
+                      {config.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Lokáció">
+                <input
+                  value={form.location}
+                  onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-400"
+                  placeholder="pl. Raktár"
+                />
+              </Field>
+
+              <Field label="Megjegyzés">
+                <input
+                  value={form.notes}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none ring-0 transition focus:border-slate-400"
+                  placeholder="pl. új huzat"
+                />
+              </Field>
+            </div>
+
+            {formError ? <p className="mt-4 text-sm font-medium text-red-600">{formError}</p> : null}
+
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                onClick={handleAddMachine}
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                Mentés
+              </button>
+              <button
+                onClick={() => setShowAddForm(false)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-100"
+              >
+                Mégse
+              </button>
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Flotta lista</h2>
+              <p className="mt-1 text-sm text-slate-500">Keresés, szűrés és státusz módosítás egy nézetben.</p>
+            </div>
+
+            <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-2 lg:max-w-2xl">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Keresés gépkód, név vagy lokáció alapján"
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
+              />
+
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as "all" | MachineStatus)}
+                className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
+              >
+                <option value="all">Összes státusz</option>
+                {Object.entries(statusConfig).map(([value, config]) => (
+                  <option key={value} value={value}>
+                    {config.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {filteredMachines.map((machine) => {
+              const expiryMeta = getExpiryMeta(machine.rentalEndDate);
+
+              return (
+                <article key={machine.id} className="rounded-3xl border border-slate-200 p-5">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-lg font-bold text-slate-900">{machine.machine_code}</h3>
+                        <span className="text-sm text-slate-500">{machine.name}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-600">
+                        {machine.type} · {machine.location}
+                      </p>
+                    </div>
+
+                    <span
+                      className={cn(
+                        "inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1",
+                        statusConfig[machine.status].className
+                      )}
+                    >
+                      {statusConfig[machine.status].label}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <InfoRow label="Ügyfél" value={machine.customerName ?? "—"} />
+                    <InfoRow label="Megjegyzés" value={machine.notes || "—"} />
+                  </div>
+
+                  {expiryMeta ? (
+                    <div className="mt-4">
+                      <span className={cn("inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1", expiryMeta.className)}>
+                        {expiryMeta.text}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-[220px]">
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Státusz módosítás
+                      </label>
+                      <select
+                        value={machine.status}
+                        onChange={(e) => updateMachineStatus(machine.id, e.target.value as MachineStatus)}
+                        className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
+                      >
+                        {Object.entries(statusConfig).map(([value, config]) => (
+                          <option key={value} value={value}>
+                            {config.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="text-sm text-slate-500">
+                      {machine.rentalEndDate ? `Lejárat: ${formatDate(machine.rentalEndDate)}` : "Nincs aktív lejárat"}
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          {filteredMachines.length === 0 ? (
+            <div className="mt-6 rounded-2xl border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
+              Nincs találat a megadott szűrésre.
+            </div>
+          ) : null}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function StatCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+      <div className="text-sm font-medium text-slate-500">{title}</div>
+      <div className="mt-3 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-semibold text-slate-700">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl bg-slate-50 px-4 py-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 text-sm text-slate-800">{value}</div>
+    </div>
+  );
+}
